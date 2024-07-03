@@ -1,6 +1,9 @@
 # Compiled class file
 *.class
 
+#api  keys env file
+*.env
+
 # Log file
 *.log
 

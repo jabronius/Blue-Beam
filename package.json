@@ -1,0 +1,19 @@
+{
+  "name": "blue-beam",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Cronos Trading Bot",
+  "main": "bot.mjs",
+  "scripts": {
+    "start": "node bot.mjs"
+  },
+  "keywords": [],
+  "author": "Aaron",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "node-fetch": "^3.3.2",
+    "telegraf": "^4.16.3",
+    "web3": "^4.10.0"
+  }
+}
