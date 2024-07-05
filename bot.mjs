@@ -19,5 +19,5 @@ bot.command('price', async (ctx) => {
   ctx.reply(`The latest price is: ${price}`);
 });
 
-bot.launch();
-
+bot.launch().then(() => {
+  console.log('Bot is running...');
