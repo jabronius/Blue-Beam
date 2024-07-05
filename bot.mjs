@@ -13,6 +13,7 @@ const bot = new Telegraf(config.telegramApiKey);
 bot.start((ctx) => ctx.reply('Welcome to the Cronos Trading Bot!'));
 bot.help((ctx) => ctx.reply('Send /price to get the latest price of a token.'));
 
+
 bot.command('price', async (ctx) => {
   const price = await getPriceOfToken();
   ctx.reply(`The latest price is: ${price}`);
