@@ -10,5 +10,7 @@ dotenv.config({ path: path.resolve(__dirname, '.env') });
 
 export const config = {
   telegramApiKey: process.env.TELEGRAM_API_KEY,
-  cronosNodeUrl: process.env.CRONOS_NODE_URL
+  cronosNodeUrl: process.env.CRONOS_NODE_URL,
+  privateKey: process.env.PRIVATE_KEY,
+  devAccount: process.env.DEV_ACCOUNT_ADDRESS
 }
