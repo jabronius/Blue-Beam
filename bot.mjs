@@ -149,4 +149,24 @@ async function sellToken(ctx) {
     config.privateKey
   );
 
-  const sellTxReceipt = await web3.eth.
+  const sellTxReceipt = await web3.eth.sendSignedTransaction(sellTxSigned.rawTransaction);
+
+  return `Sell TX: ${sellTxReceipt.transactionHash}`;
+}
+
+async function getBalance(ctx) {
+  const address = web3.eth.accounts.privateKeyToAccount(config.privateKey).address;
+  const smartContractAddress = 'SMART_CONTRACT_ADDRESS'; // Replace with actual contract address
+
+  // Assuming the token has a standard ERC20 `balanceOf` function
+  const tokenAbi = []; // Replace with ABI of the token contract
+  const tokenContract = new web3.eth.Contract(tokenAbi, smartContractAddress);
+
+  const balance = await tokenContract.methods.balanceOf(address).call();
+
+  return balance;
+}
+
+bot.launch().then(() => {
+  console.log('Bot is running...');
+});
