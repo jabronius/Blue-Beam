@@ -1,10 +1,12 @@
+import Web3 from 'web3';
 import axios from 'axios';
-import axiosRetry from 'axios-retry';
-import { config } from './config.mjs';
+import dotenv from 'dotenv';
 import { Telegraf, Markup } from 'telegraf';
+import { config } from './config.mjs';
 
-axiosRetry(axios, { retries: 3 });
+dotenv.config();
 
+const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 const bot = new Telegraf(config.telegramApiKey);
 
 bot.start((ctx) => {
@@ -56,29 +58,95 @@ bot.command('balance', async (ctx) => {
 });
 
 async function buyToken(ctx) {
-  if (!smartContractAddress) {
-    return 'Smart contract address not set.';
-  }
-  // Implement your buy logic here, using the smartContractAddress
-  return 'Transaction ID for Buy';
+  const senderAddress = web3.eth.accounts.privateKeyToAccount(config.privateKey).address;
+  const smartContractAddress = 'SMART_CONTRACT_ADDRESS'; // Replace with actual contract address
+  const buyAmount = web3.utils.toWei('1', 'ether'); // Example buy amount
+  const feePercentage = 0.005; // 0.5%
+  const feeAmount = buyAmount * feePercentage;
+  const actualBuyAmount = buyAmount - feeAmount;
+
+  // Assuming the token has a standard ERC20 `transfer` function
+  const tokenAbi = []; // Replace with ABI of the token contract
+  const tokenContract = new web3.eth.Contract(tokenAbi, smartContractAddress);
+
+  // Create transactions
+  const buyTx = tokenContract.methods.transfer(senderAddress, actualBuyAmount);
+  const feeTx = tokenContract.methods.transfer(config.devAccount, feeAmount);
+
+  const buyTxData = buyTx.encodeABI();
+  const feeTxData = feeTx.encodeABI();
+
+  const buyTxGas = await buyTx.estimateGas({ from: senderAddress });
+  const feeTxGas = await feeTx.estimateGas({ from: senderAddress });
+
+  // Send buy transaction
+  const buyTxSigned = await web3.eth.accounts.signTransaction(
+    {
+      to: smartContractAddress,
+      data: buyTxData,
+      gas: buyTxGas,
+    },
+    config.privateKey
+  );
+
+  const buyTxReceipt = await web3.eth.sendSignedTransaction(buyTxSigned.rawTransaction);
+
+  // Send fee transaction
+  const feeTxSigned = await web3.eth.accounts.signTransaction(
+    {
+      to: smartContractAddress,
+      data: feeTxData,
+      gas: feeTxGas,
+    },
+    config.privateKey
+  );
+
+  const feeTxReceipt = await web3.eth.sendSignedTransaction(feeTxSigned.rawTransaction);
+
+  return `Buy TX: ${buyTxReceipt.transactionHash}, Fee TX: ${feeTxReceipt.transactionHash}`;
 }
 
 async function sellToken(ctx) {
-  if (!smartContractAddress) {
-    return 'Smart contract address not set.';
-  }
-  // Implement your sell logic here, using the smartContractAddress
-  return 'Transaction ID for Sell';
-}
+  const senderAddress = web3.eth.accounts.privateKeyToAccount(config.privateKey).address;
+  const smartContractAddress = 'SMART_CONTRACT_ADDRESS'; // Replace with actual contract address
+  const sellAmount = web3.utils.toWei('1', 'ether'); // Example sell amount
 
-async function getBalance(ctx) {
-  if (!smartContractAddress) {
-    return 'Smart contract address not set.';
-  }
-  // Implement your balance check logic here, using the smartContractAddress
-  return '1000 tokens';
-}
+  // Assuming the token has a standard ERC20 `approve` and `transferFrom` functions
+  const tokenAbi = []; // Replace with ABI of the token contract
+  const tokenContract = new web3.eth.Contract(tokenAbi, smartContractAddress);
 
-bot.launch().then(() => {
-  console.log('Bot is running...');
-});
+  // Approve token transfer
+  const approveTx = tokenContract.methods.approve(smartContractAddress, sellAmount);
+
+  const approveTxData = approveTx.encodeABI();
+  const approveTxGas = await approveTx.estimateGas({ from: senderAddress });
+
+  // Send approve transaction
+  const approveTxSigned = await web3.eth.accounts.signTransaction(
+    {
+      to: smartContractAddress,
+      data: approveTxData,
+      gas: approveTxGas,
+    },
+    config.privateKey
+  );
+
+  const approveTxReceipt = await web3.eth.sendSignedTransaction(approveTxSigned.rawTransaction);
+
+  // Execute sell transaction
+  const sellTx = tokenContract.methods.transferFrom(senderAddress, config.devAccount, sellAmount);
+
+  const sellTxData = sellTx.encodeABI();
+  const sellTxGas = await sellTx.estimateGas({ from: senderAddress });
+
+  // Send sell transaction
+  const sellTxSigned = await web3.eth.accounts.signTransaction(
+    {
+      to: smartContractAddress,
+      data: sellTxData,
+      gas: sellTxGas,
+    },
+    config.privateKey
+  );
+
+  const sellTxReceipt = await web3.eth.
