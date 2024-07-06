@@ -11,6 +11,13 @@ console.log('TELEGRAM_API_KEY:', config.telegramApiKey);
 console.log('CRONOS_NODE_URL:', config.cronosNodeUrl);
 console.log('DEV_ACCOUNT_ADDRESS:', config.devAccount);
 
+try {
+  dotenv.config({ path: path.resolve(__dirname, '.env') });
+  console.log('Environment variables loaded successfully');
+} catch (error) {
+  console.error('Error loading environment variables:', error);
+}
+
 if (!config.cronosNodeUrl) {
   console.error('CRONOS_NODE_URL is not defined. Please check your .env file.');
   process.exit(1);
