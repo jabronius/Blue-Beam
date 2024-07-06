@@ -22,28 +22,15 @@ export async function handleCallbackQuery(ctx) {
 
   if (action === 'import_wallet') {
     ctx.reply('Please send your private key to import your Cronos Chain wallet.');
-    // You can then listen for the next message containing the private key
-    ctx.telegram.on('message', async (ctx) => {
-      const privateKey = ctx.message.text;
-      try {
-        const account = web3.eth.accounts.privateKeyToAccount(privateKey);
-        // Store the imported private key securely
-        // e.g., store in database or a secure variable
-        ctx.reply(`Wallet imported successfully! Address: ${account.address}`);
-      } catch (error) {
-        ctx.reply('Invalid private key. Please try again.');
-      }
-    });
-  }
+    ctx.session = { action: 'import_wallet' }; // Store action in session
 
-  if (action === 'create_wallet') {
+  } else if (action === 'create_wallet') {
     const account = web3.eth.accounts.create();
     // Store the newly created private key securely
     // e.g., store in database or a secure variable
     ctx.reply(`New wallet created successfully! Address: ${account.address}\nPrivate Key: ${account.privateKey}`);
-  }
 
-  if (action === 'buy') {
+  } else if (action === 'buy') {
     try {
       const transactionResult = await buyToken(ctx);
       ctx.reply(`Buy command executed successfully: ${transactionResult}`);
@@ -51,9 +38,8 @@ export async function handleCallbackQuery(ctx) {
       console.error('Error executing buy command:', error);
       ctx.reply('Failed to execute buy command.');
     }
-  }
 
-  if (action === 'sell') {
+  } else if (action === 'sell') {
     try {
       const transactionResult = await sellToken(ctx);
       ctx.reply(`Sell command executed successfully: ${transactionResult}`);
@@ -61,9 +47,8 @@ export async function handleCallbackQuery(ctx) {
       console.error('Error executing sell command:', error);
       ctx.reply('Failed to execute sell command.');
     }
-  }
 
-  if (action === 'check_balance') {
+  } else if (action === 'check_balance') {
     try {
       const balance = await getBalance(ctx);
       ctx.reply(`Your current balance is: ${balance}`);
@@ -74,6 +59,23 @@ export async function handleCallbackQuery(ctx) {
   }
 }
 
+// Function to handle user messages based on the session
+export async function handleMessage(ctx) {
+  if (ctx.session && ctx.session.action === 'import_wallet') {
+    const privateKey = ctx.message.text;
+    try {
+      const account = web3.eth.accounts.privateKeyToAccount(privateKey);
+      // Store the imported private key securely
+      // e.g., store in database or a secure variable
+      ctx.reply(`Wallet imported successfully! Address: ${account.address}`);
+      ctx.session = null; // Clear session
+    } catch (error) {
+      ctx.reply('Invalid private key. Please try again.');
+    }
+  }
+}
+
+// Helper functions (buyToken, sellToken, getBalance)
 async function buyToken(ctx) {
   const senderAddress = web3.eth.accounts.privateKeyToAccount(config.privateKey).address;
   const buyAmount = web3.utils.toWei('1', 'ether'); // Example buy amount
