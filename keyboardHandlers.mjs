@@ -7,7 +7,7 @@ import { config } from './config.mjs';
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 let smartContractAddress = '';
 
-// Function to handle the start command
+// Function to handle the start command ; good stuff
 export function handleStart(ctx) {
   ctx.reply(
     'Welcome to the Cronos Trading Bot! Please choose an option:',
