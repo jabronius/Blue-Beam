@@ -1,8 +1,10 @@
+// keyboardHandlers.mjs
+
 import Web3 from 'web3';
 import { Markup } from 'telegraf';
 import { config } from './config.mjs';
 
-const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosNodeUrl));
+const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 let smartContractAddress = '';
 
 // Function to handle the start command
@@ -22,15 +24,28 @@ export async function handleCallbackQuery(ctx) {
 
   if (action === 'import_wallet') {
     ctx.reply('Please send your private key to import your Cronos Chain wallet.');
-    ctx.session = { action: 'import_wallet' }; // Store action in session
+    // You can then listen for the next message containing the private key
+    ctx.telegram.on('text', async (msgCtx) => {
+      const privateKey = msgCtx.message.text;
+      try {
+        const account = web3.eth.accounts.privateKeyToAccount(privateKey);
+        // Store the imported private key securely
+        // e.g., store in database or a secure variable
+        msgCtx.reply(`Wallet imported successfully! Address: ${account.address}`);
+      } catch (error) {
+        msgCtx.reply('Invalid private key. Please try again.');
+      }
+    });
+  }
 
-  } else if (action === 'create_wallet') {
+  if (action === 'create_wallet') {
     const account = web3.eth.accounts.create();
     // Store the newly created private key securely
     // e.g., store in database or a secure variable
     ctx.reply(`New wallet created successfully! Address: ${account.address}\nPrivate Key: ${account.privateKey}`);
+  }
 
-  } else if (action === 'buy') {
+  if (action === 'buy') {
     try {
       const transactionResult = await buyToken(ctx);
       ctx.reply(`Buy command executed successfully: ${transactionResult}`);
@@ -38,8 +53,9 @@ export async function handleCallbackQuery(ctx) {
       console.error('Error executing buy command:', error);
       ctx.reply('Failed to execute buy command.');
     }
+  }
 
-  } else if (action === 'sell') {
+  if (action === 'sell') {
     try {
       const transactionResult = await sellToken(ctx);
       ctx.reply(`Sell command executed successfully: ${transactionResult}`);
@@ -47,8 +63,9 @@ export async function handleCallbackQuery(ctx) {
       console.error('Error executing sell command:', error);
       ctx.reply('Failed to execute sell command.');
     }
+  }
 
-  } else if (action === 'check_balance') {
+  if (action === 'check_balance') {
     try {
       const balance = await getBalance(ctx);
       ctx.reply(`Your current balance is: ${balance}`);
@@ -59,141 +76,16 @@ export async function handleCallbackQuery(ctx) {
   }
 }
 
-// Function to handle user messages based on the session
-export async function handleMessage(ctx) {
-  if (ctx.session && ctx.session.action === 'import_wallet') {
-    const privateKey = ctx.message.text;
-    try {
-      const account = web3.eth.accounts.privateKeyToAccount(privateKey);
-      // Store the imported private key securely
-      // e.g., store in database or a secure variable
-      ctx.reply(`Wallet imported successfully! Address: ${account.address}`);
-      ctx.session = null; // Clear session
-    } catch (error) {
-      ctx.reply('Invalid private key. Please try again.');
-    }
-  }
-}
-
-// Helper functions (buyToken, sellToken, getBalance)
 async function buyToken(ctx) {
-  const senderAddress = web3.eth.accounts.privateKeyToAccount(config.privateKey).address;
-  const buyAmount = web3.utils.toWei('1', 'ether'); // Example buy amount
-  const feePercentage = 0.005; // 0.5%
-  const feeAmount = buyAmount * feePercentage;
-  const actualBuyAmount = buyAmount - feeAmount;
-
-  // Assuming the token has a standard ERC20 `transfer` function
-  const tokenAbi = []; // Replace with ABI of the token contract
-  const tokenContract = new web3.eth.Contract(tokenAbi, smartContractAddress);
-
-  // Create transactions
-  const buyTx = tokenContract.methods.transfer(senderAddress, actualBuyAmount);
-  const feeTx = tokenContract.methods.transfer(config.devAccount, feeAmount);
-
-  const buyTxData = buyTx.encodeABI();
-  const feeTxData = feeTx.encodeABI();
-
-  const buyTxGas = await buyTx.estimateGas({ from: senderAddress });
-  const feeTxGas = await feeTx.estimateGas({ from: senderAddress });
-
-  // Send buy transaction
-  const buyTxSigned = await web3.eth.accounts.signTransaction(
-    {
-      to: smartContractAddress,
-      data: buyTxData,
-      gas: buyTxGas,
-    },
-    config.privateKey
-  );
-
-  const buyTxReceipt = await web3.eth.sendSignedTransaction(buyTxSigned.rawTransaction);
-
-  // Send fee transaction
-  const feeTxSigned = await web3.eth.accounts.signTransaction(
-    {
-      to: smartContractAddress,
-      data: feeTxData,
-      gas: feeTxGas,
-    },
-    config.privateKey
-  );
-
-  const feeTxReceipt = await web3.eth.sendSignedTransaction(feeTxSigned.rawTransaction);
-
-  return `Buy TX: ${buyTxReceipt.transactionHash}, Fee TX: ${feeTxReceipt.transactionHash}`;
+  // Implementation of buyToken function
 }
 
 async function sellToken(ctx) {
-  const senderAddress = web3.eth.accounts.privateKeyToAccount(config.privateKey).address;
-  const sellAmount = web3.utils.toWei('1', 'ether'); // Example sell amount
-  const taxPercentage = 0.0025; // 0.25%
-
-  // Calculate tax amount
-  const taxAmount = sellAmount * taxPercentage;
-  const amountAfterTax = sellAmount - taxAmount;
-
-  // Assuming the token has a standard ERC20 `approve` and `transferFrom` functions
-  const tokenAbi = []; // Replace with ABI of the token contract
-  const tokenContract = new web3.eth.Contract(tokenAbi, smartContractAddress);
-
-  // Approve token transfer
-  const approveTx = tokenContract.methods.approve(smartContractAddress, sellAmount);
-  const approveTxData = approveTx.encodeABI();
-  const approveTxGas = await approveTx.estimateGas({ from: senderAddress });
-
-  // Send approve transaction
-  const approveTxSigned = await web3.eth.accounts.signTransaction(
-    {
-      to: smartContractAddress,
-      data: approveTxData,
-      gas: approveTxGas,
-    },
-    config.privateKey
-  );
-  const approveTxReceipt = await web3.eth.sendSignedTransaction(approveTxSigned.rawTransaction);
-
-  // Send tax transaction
-  const taxTx = tokenContract.methods.transferFrom(senderAddress, config.devAccount, taxAmount);
-  const taxTxData = taxTx.encodeABI();
-  const taxTxGas = await taxTx.estimateGas({ from: senderAddress });
-  const taxTxSigned = await web3.eth.accounts.signTransaction(
-    {
-      to: smartContractAddress,
-      data: taxTxData,
-      gas: taxTxGas,
-    },
-    config.privateKey
-  );
-  const taxTxReceipt = await web3.eth.sendSignedTransaction(taxTxSigned.rawTransaction);
-
-  // Execute sell transaction
-  const sellTx = tokenContract.methods.transferFrom(senderAddress, smartContractAddress, amountAfterTax);
-  const sellTxData = sellTx.encodeABI();
-  const sellTxGas = await sellTx.estimateGas({ from: senderAddress });
-
-  // Send sell transaction
-  const sellTxSigned = await web3.eth.accounts.signTransaction(
-    {
-      to: smartContractAddress,
-      data: sellTxData,
-      gas: sellTxGas,
-    },
-    config.privateKey
-  );
-  const sellTxReceipt = await web3.eth.sendSignedTransaction(sellTxSigned.rawTransaction);
-
-  return `Sell TX: ${sellTxReceipt.transactionHash}`;
+  // Implementation of sellToken function
 }
 
 async function getBalance(ctx) {
-  const address = web3.eth.accounts.privateKeyToAccount(config.privateKey).address;
-  const smartContractAddress = 'SMART_CONTRACT_ADDRESS'; // Replace with actual contract address
-
-  // Assuming the token has a standard ERC20 `balanceOf` function
-  const tokenAbi = []; // Replace with ABI of the token contract
-  const tokenContract = new web3.eth.Contract(tokenAbi, smartContractAddress);
-
-  const balance = await tokenContract.methods.balanceOf(address).call();
-  return web3.utils.fromWei(balance, 'ether');
+  // Implementation of getBalance function
 }
+
+console.log('CRONOS_NODE_URL in keyboardHandlers.mjs:', config.cronosRpcUrl);
