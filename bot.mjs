@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import { Telegraf } from 'telegraf';
 import { config } from './config.mjs';
 import { handleStart, handleCallbackQuery } from './keyboardHandlers.mjs';
-
+// note
 dotenv.config();  // Load environment variables from .env file
 
 // Validate that the variables are loaded correctly
