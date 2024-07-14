@@ -1,3 +1,5 @@
+// config.mjs
+
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -13,5 +15,3 @@ export const config = {
   privateKey: process.env.PRIVATE_KEY,
   devAccount: process.env.DEV_ACCOUNT_ADDRESS
 };
-
-console.log('Loaded Configuration:', config);
