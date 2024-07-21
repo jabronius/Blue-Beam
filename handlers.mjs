@@ -2,6 +2,7 @@ import axios from 'axios';
 import { Markup } from 'telegraf';
 import Web3 from 'web3';
 import { config } from './config.mjs';
+import cheerio from 'cheerio';
 
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 
@@ -20,9 +21,8 @@ async function validateTokenAddressOnExplorer(tokenAddress) {
   try {
     const response = await axios.get(`${CRONOS_EXPLORER_API_URL}${tokenAddress}`);
     const data = response.data;
-    // Check if the token address is valid by examining the response data
+    console.log('Explorer Response Data:', data); // Debugging
     const isValid = data && data.token && data.token.address.toLowerCase() === tokenAddress.toLowerCase();
-    console.log('Token Address Valid:', isValid); // Debugging
     return isValid;
   } catch (error) {
     console.error('Error validating token address on Cronos Explorer:', error.message);
@@ -32,6 +32,7 @@ async function validateTokenAddressOnExplorer(tokenAddress) {
 
 async function getTokenInfo(tokenAddress) {
   try {
+    // Check if the address is valid
     if (!web3.utils.isAddress(tokenAddress) || !(await validateTokenAddressOnExplorer(tokenAddress))) {
       throw new Error('Invalid token address.');
     }
@@ -114,7 +115,8 @@ async function handleCallbackQuery(ctx) {
 
 async function handleMessage(ctx) {
   if (ctx.session && ctx.session.expectingTokenAddress) {
-    const tokenAddress = ctx.message.text;
+    const tokenAddress = ctx.message.text.trim();
+    console.log('Received Token Address:', tokenAddress); // Debugging
 
     const tokenInfo = await getTokenInfo(tokenAddress);
 
