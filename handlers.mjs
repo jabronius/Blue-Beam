@@ -7,8 +7,13 @@ import Web3 from 'web3';
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 
 async function getCronosBalance(userId) {
-  // Placeholder function to fetch balance from Cronos network
-  return '1000'; // Replace with actual balance fetching logic
+  try {
+    const balance = await web3.eth.getBalance(config.cronosAddress);
+    return web3.utils.fromWei(balance, 'ether');
+  } catch (error) {
+    console.error('Error fetching balance:', error);
+    return '0';
+  }
 }
 
 async function handleStart(ctx) {
@@ -37,45 +42,54 @@ async function handleCallbackQuery(ctx) {
       ]));
       break;
     case 'open_positions':
-      // Implement logic for open positions
+      await handleOpenPositions(ctx);
       break;
     case 'help':
-      // Implement help functionality
+      await handleHelp(ctx);
       break;
     case 'settings':
-      // Implement settings functionality
+      await handleSettings(ctx);
       break;
     case 'buy_1000_cro':
-      await handleBuy(ctx, '1000'); // Example: Buy 1000 CRO
+      await handleBuy(ctx, '1000');
       break;
     case 'buy_custom_cro':
-      // Implement custom buy logic
+      await handleCustomBuy(ctx);
       break;
     default:
-      // Handle unknown action
+      ctx.reply('Unknown action!');
       break;
   }
 }
 
 async function handleCreateWallet(ctx) {
-  // Logic to create a new Cronos wallet and store securely
-  // After successful creation, display balance and options
-  const balance = await getCronosBalance(ctx.from.id);
-  await sendBalanceAndOptions(ctx, balance);
+  try {
+    // Logic to create a new Cronos wallet and store securely
+    const account = web3.eth.accounts.create();
+    // Store the account securely, for example in a database
+    const balance = await getCronosBalance(ctx.from.id);
+    await sendBalanceAndOptions(ctx, balance);
+  } catch (error) {
+    console.error('Error creating wallet:', error);
+    ctx.reply('Failed to create wallet.');
+  }
 }
 
 async function handleImportWallet(ctx) {
-  // Logic to import existing Cronos wallet using private key
-  // After successful import, display balance and options
-  const balance = await getCronosBalance(ctx.from.id);
-  await sendBalanceAndOptions(ctx, balance);
+  try {
+    // Logic to import existing Cronos wallet using private key
+    const balance = await getCronosBalance(ctx.from.id);
+    await sendBalanceAndOptions(ctx, balance);
+  } catch (error) {
+    console.error('Error importing wallet:', error);
+    ctx.reply('Failed to import wallet.');
+  }
 }
 
 async function handleBuy(ctx, amount) {
-  // Example function to handle buy transaction
   try {
     const senderAddress = web3.eth.accounts.privateKeyToAccount(config.privateKey).address;
-    const buyAmount = web3.utils.toWei(amount, 'ether'); // Convert to Wei
+    const buyAmount = web3.utils.toWei(amount, 'ether');
     // Implement buy logic
     ctx.reply(`Buy ${amount} CRO transaction initiated.`);
   } catch (error) {
@@ -91,6 +105,23 @@ async function sendBalanceAndOptions(ctx, balance) {
     Markup.button.callback('Help', 'help'),
     Markup.button.callback('Settings', 'settings')
   ]));
+}
+
+async function handleOpenPositions(ctx) {
+  // Implement logic to display current coins owned, PNL % Gains and losses, and option to sell by %
+  ctx.reply('Open positions logic not yet implemented.');
+}
+
+async function handleHelp(ctx) {
+  ctx.reply('Help information not yet implemented.');
+}
+
+async function handleSettings(ctx) {
+  ctx.reply('Settings options not yet implemented.');
+}
+
+async function handleCustomBuy(ctx) {
+  ctx.reply('Custom buy logic not yet implemented.');
 }
 
 export { handleStart, handleCallbackQuery };
