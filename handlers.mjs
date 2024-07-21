@@ -1,35 +1,75 @@
+import axios from 'axios';
 import { Markup } from 'telegraf';
-import { config } from './config.mjs';
 import Web3 from 'web3';
-import fetch from 'node-fetch';  // Make sure to install node-fetch or use another fetch library
+import { config } from './config.mjs';
 
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 
-// Example API endpoints (replace with actual URLs and parameters)
-const COINGECKO_API = 'https://api.coingecko.com/api/v3';
-const DEXSCREENER_URL = 'https://dexscreener.com/cronos/';
+// API endpoints
+const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
+const CRONOS_EXPLORER_API_URL = 'https://cronos.org/explorer/api/v1/tokens/';
 
+// Placeholder function to fetch balance from Cronos network
 async function getCronosBalance(userId) {
-  // Placeholder function to fetch balance from Cronos network
+  // Implement actual logic to get the balance based on userId
   return '1000'; // Replace with actual balance fetching logic
 }
 
-async function fetchTokenDetails(tokenAddress) {
+// Validate the token address on Cronos Explorer
+async function validateTokenAddressOnExplorer(tokenAddress) {
   try {
-    // Fetch token details (example using CoinGecko API)
-    const response = await fetch(`${COINGECKO_API}/coins/ethereum/contract/${tokenAddress}`);
-    const data = await response.json();
-
-    const marketCap = data.market_data.market_cap.usd || 'N/A';
-    const currentPriceCRO = data.market_data.current_price.cro || 'N/A';
-    const currentPriceUSD = data.market_data.current_price.usd || 'N/A';
-    const age = 'N/A'; // Replace with actual token age fetching logic
-    const dexscreenerLink = `${DEXSCREENER_URL}${tokenAddress}`;
-
-    return { marketCap, currentPriceCRO, currentPriceUSD, age, dexscreenerLink };
+    const response = await axios.get(`${CRONOS_EXPLORER_API_URL}${tokenAddress}`);
+    const data = response.data;
+    // Check if the token address is valid by examining the response data
+    const isValid = data && data.token && data.token.address.toLowerCase() === tokenAddress.toLowerCase();
+    console.log('Token Address Valid:', isValid); // Debugging
+    return isValid;
   } catch (error) {
-    console.error('Error fetching token details:', error);
-    throw new Error('Failed to fetch token details.');
+    console.error('Error validating token address on Cronos Explorer:', error.message);
+    return false;
+  }
+}
+
+async function getTokenInfo(tokenAddress) {
+  try {
+    if (!web3.utils.isAddress(tokenAddress) || !(await validateTokenAddressOnExplorer(tokenAddress))) {
+      throw new Error('Invalid token address.');
+    }
+
+    // Fetch data from DexScreener
+    const dexScreenerResponse = await axios.get(`${DEXS_CREENER_API_URL}${tokenAddress}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
+    const dexScreenerData = dexScreenerResponse.data;
+    console.log('DexScreener Data:', dexScreenerData); // Debugging
+
+    // Try to find the pair in DexScreener response
+    const dexScreenerPair = dexScreenerData.pairs.find(p => 
+      p.pairAddress.toLowerCase() === tokenAddress.toLowerCase() ||
+      p.baseToken.address.toLowerCase() === tokenAddress.toLowerCase() ||
+      p.quoteToken.address.toLowerCase() === tokenAddress.toLowerCase()
+    );
+
+    // Fetch data from Cronos Explorer for additional details
+    const explorerResponse = await axios.get(`${CRONOS_EXPLORER_API_URL}${tokenAddress}`);
+    const explorerData = explorerResponse.data;
+    console.log('Explorer Data:', explorerData); // Debugging
+
+    // Combine data from both sources
+    return {
+      tokenName: dexScreenerPair ? dexScreenerPair.baseToken.name : explorerData.token.name || 'N/A',
+      tokenSymbol: dexScreenerPair ? dexScreenerPair.baseToken.symbol : explorerData.token.symbol || 'N/A',
+      currentPriceCRO: dexScreenerPair ? dexScreenerPair.priceNative : 'N/A',
+      currentPriceUSD: dexScreenerPair ? dexScreenerPair.priceUsd : explorerData.token.price_usd || 'N/A',
+      marketCap: dexScreenerPair ? dexScreenerPair.fdv : explorerData.token.market_cap || 'N/A',
+      ageOfToken: dexScreenerPair ? new Date(dexScreenerPair.pairCreatedAt).toLocaleDateString() : explorerData.token.created_at || 'N/A',
+      url: dexScreenerPair ? dexScreenerPair.url : `https://www.coingecko.com/en/coins/${explorerData.token.id}` || 'N/A'
+    };
+  } catch (error) {
+    console.error('Error fetching token information:', error.message);
+    return null;
   }
 }
 
@@ -44,7 +84,7 @@ async function handleStart(ctx) {
 
 async function handleCallbackQuery(ctx) {
   const action = ctx.callbackQuery.data;
-  
+
   switch (action) {
     case 'create_wallet':
       await handleCreateWallet(ctx);
@@ -53,7 +93,9 @@ async function handleCallbackQuery(ctx) {
       await handleImportWallet(ctx);
       break;
     case 'buy_token':
-      ctx.reply('Please paste the Cronos token address:');
+      ctx.reply('Please paste the Cronos token address.');
+      ctx.session = ctx.session || {};  // Initialize session if it doesn't exist
+      ctx.session.expectingTokenAddress = true;
       break;
     case 'open_positions':
       // Implement logic for open positions
@@ -64,15 +106,34 @@ async function handleCallbackQuery(ctx) {
     case 'settings':
       // Implement settings functionality
       break;
-    case 'buy_1000_cro':
-      await handleBuy(ctx, '1000'); // Example: Buy 1000 CRO
-      break;
-    case 'buy_custom_cro':
-      // Implement custom buy logic
-      break;
     default:
       // Handle unknown action
       break;
+  }
+}
+
+async function handleMessage(ctx) {
+  if (ctx.session && ctx.session.expectingTokenAddress) {
+    const tokenAddress = ctx.message.text;
+
+    const tokenInfo = await getTokenInfo(tokenAddress);
+
+    if (tokenInfo) {
+      ctx.reply(
+        `Token Information:\n` +
+        `Name: ${tokenInfo.tokenName}\n` +
+        `Symbol: ${tokenInfo.tokenSymbol}\n` +
+        `Current Price (CRO): ${tokenInfo.currentPriceCRO}\n` +
+        `Current Price (USD): ${tokenInfo.currentPriceUSD}\n` +
+        `Market Cap: ${tokenInfo.marketCap}\n` +
+        `Age of Token: ${tokenInfo.ageOfToken}\n` +
+        `DexScreener URL: ${tokenInfo.url}`
+      );
+    } else {
+      ctx.reply('Failed to fetch token information. Please try again later.');
+    }
+
+    ctx.session.expectingTokenAddress = false;
   }
 }
 
@@ -90,19 +151,6 @@ async function handleImportWallet(ctx) {
   await sendBalanceAndOptions(ctx, balance);
 }
 
-async function handleBuy(ctx, amount) {
-  // Example function to handle buy transaction
-  try {
-    const senderAddress = web3.eth.accounts.privateKeyToAccount(config.privateKey).address;
-    const buyAmount = web3.utils.toWei(amount, 'ether'); // Convert to Wei
-    // Implement buy logic
-    ctx.reply(`Buy ${amount} CRO transaction initiated.`);
-  } catch (error) {
-    console.error('Error executing buy transaction:', error);
-    ctx.reply('Failed to execute buy transaction.');
-  }
-}
-
 async function sendBalanceAndOptions(ctx, balance) {
   ctx.reply(`Cronos Balance: ${balance}`, Markup.inlineKeyboard([
     Markup.button.callback('Buy Token', 'buy_token'),
@@ -112,58 +160,4 @@ async function sendBalanceAndOptions(ctx, balance) {
   ]));
 }
 
-async function handleTokenAddress(ctx) {
-  const tokenAddress = ctx.message.text;
-
-  try {
-    const details = await fetchTokenDetails(tokenAddress);
-    const { marketCap, currentPriceCRO, currentPriceUSD, age, dexscreenerLink } = details;
-
-    ctx.reply(`Token Details:
-      Market Cap: ${marketCap}
-      Current Price (CRO): ${currentPriceCRO}
-      Current Price (USD): ${currentPriceUSD}
-      Age: ${age}
-      DexScreener Link: ${dexscreenerLink}`);
-  } catch (error) {
-    ctx.reply('Failed to fetch token details. Please try again.');
-  }
-}
-
-// Update the `handleCallbackQuery` to include `handleTokenAddress` logic
-async function handleCallbackQuery(ctx) {
-  const action = ctx.callbackQuery.data;
-  
-  switch (action) {
-    case 'create_wallet':
-      await handleCreateWallet(ctx);
-      break;
-    case 'import_wallet':
-      await handleImportWallet(ctx);
-      break;
-    case 'buy_token':
-      ctx.reply('Please paste the Cronos token address:');
-      bot.on('text', handleTokenAddress); // Add handler for token address input
-      break;
-    case 'open_positions':
-      // Implement logic for open positions
-      break;
-    case 'help':
-      // Implement help functionality
-      break;
-    case 'settings':
-      // Implement settings functionality
-      break;
-    case 'buy_1000_cro':
-      await handleBuy(ctx, '1000'); // Example: Buy 1000 CRO
-      break;
-    case 'buy_custom_cro':
-      // Implement custom buy logic
-      break;
-    default:
-      // Handle unknown action
-      break;
-  }
-}
-
-export { handleStart, handleCallbackQuery };
+export { handleStart, handleCallbackQuery, handleMessage };
