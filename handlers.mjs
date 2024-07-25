@@ -2,7 +2,6 @@ import axios from 'axios';
 import { Markup } from 'telegraf';
 import Web3 from 'web3';
 import { config } from './config.mjs';
-import cheerio from 'cheerio';
 
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 
@@ -33,8 +32,14 @@ async function validateTokenAddressOnExplorer(tokenAddress) {
 async function getTokenInfo(tokenAddress) {
   try {
     // Check if the address is valid
-    if (!web3.utils.isAddress(tokenAddress) || !(await validateTokenAddressOnExplorer(tokenAddress))) {
+    if (!web3.utils.isAddress(tokenAddress)) {
       throw new Error('Invalid token address.');
+    }
+
+    // Validate the token address on Cronos Explorer
+    const isValid = await validateTokenAddressOnExplorer(tokenAddress);
+    if (!isValid) {
+      throw new Error('Token address not found on Cronos Explorer.');
     }
 
     // Fetch data from DexScreener
@@ -46,13 +51,6 @@ async function getTokenInfo(tokenAddress) {
     const dexScreenerData = dexScreenerResponse.data;
     console.log('DexScreener Data:', dexScreenerData); // Debugging
 
-    // Try to find the pair in DexScreener response
-    const dexScreenerPair = dexScreenerData.pairs.find(p => 
-      p.pairAddress.toLowerCase() === tokenAddress.toLowerCase() ||
-      p.baseToken.address.toLowerCase() === tokenAddress.toLowerCase() ||
-      p.quoteToken.address.toLowerCase() === tokenAddress.toLowerCase()
-    );
-
     // Fetch data from Cronos Explorer for additional details
     const explorerResponse = await axios.get(`${CRONOS_EXPLORER_API_URL}${tokenAddress}`);
     const explorerData = explorerResponse.data;
@@ -60,13 +58,13 @@ async function getTokenInfo(tokenAddress) {
 
     // Combine data from both sources
     return {
-      tokenName: dexScreenerPair ? dexScreenerPair.baseToken.name : explorerData.token.name || 'N/A',
-      tokenSymbol: dexScreenerPair ? dexScreenerPair.baseToken.symbol : explorerData.token.symbol || 'N/A',
-      currentPriceCRO: dexScreenerPair ? dexScreenerPair.priceNative : 'N/A',
-      currentPriceUSD: dexScreenerPair ? dexScreenerPair.priceUsd : explorerData.token.price_usd || 'N/A',
-      marketCap: dexScreenerPair ? dexScreenerPair.fdv : explorerData.token.market_cap || 'N/A',
-      ageOfToken: dexScreenerPair ? new Date(dexScreenerPair.pairCreatedAt).toLocaleDateString() : explorerData.token.created_at || 'N/A',
-      url: dexScreenerPair ? dexScreenerPair.url : `https://www.coingecko.com/en/coins/${explorerData.token.id}` || 'N/A'
+      tokenName: dexScreenerData.name || explorerData.token.name || 'N/A',
+      tokenSymbol: dexScreenerData.symbol || explorerData.token.symbol || 'N/A',
+      currentPriceCRO: dexScreenerData.priceNative || 'N/A',
+      currentPriceUSD: dexScreenerData.priceUsd || explorerData.token.price_usd || 'N/A',
+      marketCap: dexScreenerData.fdv || explorerData.token.market_cap || 'N/A',
+      ageOfToken: new Date(dexScreenerData.pairCreatedAt || explorerData.token.created_at).toLocaleDateString() || 'N/A',
+      url: dexScreenerData.url || `https://www.coingecko.com/en/coins/${explorerData.token.id}` || 'N/A'
     };
   } catch (error) {
     console.error('Error fetching token information:', error.message);
