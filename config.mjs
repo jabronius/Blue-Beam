@@ -13,5 +13,6 @@ export const config = {
   telegramApiKey: process.env.TELEGRAM_API_KEY,
   cronosRpcUrl: process.env.CRONOS_NODE_URL,
   privateKey: process.env.PRIVATE_KEY,
-  devAccount: process.env.DEV_ACCOUNT_ADDRESS
+  devAccount: process.env.DEV_ACCOUNT_ADDRESS,
+  cronosExplorerApiKey: process.env.CRONOS_EXPLORER_API_KEY
 };

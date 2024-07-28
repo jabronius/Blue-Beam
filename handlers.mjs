@@ -5,30 +5,14 @@ import { config } from './config.mjs';
 
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 
-// API endpoints
+// API endpoint
 const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
-const CRONOS_EXPLORER_API_URL = 'https://cronos.org/explorer/api?module=contract&action=verify';
 
 // Placeholder function to fetch balance from Cronos network
 async function getCronosBalance(userId) {
   // Implement actual logic to get the balance based on userId
   return '1000'; // Replace with actual balance fetching logic
 }
-
-// Validate the token address on Cronos Explorer
-async function validateTokenAddressOnExplorer(tokenAddress) {
-  try {
-    const response = await axios.get(`${CRONOS_EXPLORER_API_URL}${tokenAddress}`);
-    const data = response.data;
-    console.log('Explorer Response Data:', data); // Debugging
-    const isValid = data && data.token && data.token.address.toLowerCase() === tokenAddress.toLowerCase();
-    return isValid;
-  } catch (error) {
-    console.error('Error validating token address on Cronos Explorer:', error.response ? error.response.data : error.message);
-    return false;
-  }
-}
-
 
 async function getTokenInfo(tokenAddress) {
   try {
@@ -37,15 +21,7 @@ async function getTokenInfo(tokenAddress) {
       throw new Error('Invalid token address.');
     }
 
-    // Validate the token address on Cronos Explorer
-    console.log('Validating token address on Cronos Explorer:', tokenAddress); // Debugging
-    const isValid = await validateTokenAddressOnExplorer(tokenAddress);
-    if (!isValid) {
-      throw new Error('Token address not found on Cronos Explorer.');
-    }
-
     // Fetch data from DexScreener
-    console.log('Fetching data from DexScreener:', tokenAddress); // Debugging
     const dexScreenerResponse = await axios.get(`${DEXS_CREENER_API_URL}${tokenAddress}`, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -54,21 +30,20 @@ async function getTokenInfo(tokenAddress) {
     const dexScreenerData = dexScreenerResponse.data;
     console.log('DexScreener Data:', dexScreenerData); // Debugging
 
-    // Fetch data from Cronos Explorer for additional details
-    console.log('Fetching data from Cronos Explorer:', tokenAddress); // Debugging
-    const explorerResponse = await axios.get(`${CRONOS_EXPLORER_API_URL}${tokenAddress}`);
-    const explorerData = explorerResponse.data;
-    console.log('Explorer Data:', explorerData); // Debugging
+    if (!dexScreenerData || !dexScreenerData.pairs || dexScreenerData.pairs.length === 0) {
+      throw new Error('Token information not found on DexScreener.');
+    }
 
-    // Combine data from both sources
+    const tokenInfo = dexScreenerData.pairs[0];
+
     return {
-      tokenName: dexScreenerData.name || explorerData.token.name || 'N/A',
-      tokenSymbol: dexScreenerData.symbol || explorerData.token.symbol || 'N/A',
-      currentPriceCRO: dexScreenerData.priceNative || 'N/A',
-      currentPriceUSD: dexScreenerData.priceUsd || explorerData.token.price_usd || 'N/A',
-      marketCap: dexScreenerData.fdv || explorerData.token.market_cap || 'N/A',
-      ageOfToken: new Date(dexScreenerData.pairCreatedAt || explorerData.token.created_at).toLocaleDateString() || 'N/A',
-      url: dexScreenerData.url || `https://www.coingecko.com/en/coins/${explorerData.token.id}` || 'N/A'
+      tokenName: tokenInfo.baseToken.name || 'N/A',
+      tokenSymbol: tokenInfo.baseToken.symbol || 'N/A',
+      currentPriceCRO: tokenInfo.priceNative || 'N/A',
+      currentPriceUSD: tokenInfo.priceUsd || 'N/A',
+      marketCap: tokenInfo.fdv || 'N/A',
+      ageOfToken: new Date(tokenInfo.pairCreatedAt).toLocaleDateString() || 'N/A',
+      url: tokenInfo.url || 'N/A'
     };
   } catch (error) {
     console.error('Error fetching token information:', error.message);
