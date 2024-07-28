@@ -1,7 +1,9 @@
 import axios from 'axios';
 import { Markup } from 'telegraf';
 import Web3 from 'web3';
-import { config } from './config.mjs';
+import { config } from './config.mjs';4
+import { getAddressByUserId } from './database.mjs';
+
 
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 
@@ -112,10 +114,20 @@ async function handleMessage(ctx) {
 }
 
 async function sendTokenInfo(ctx, tokenInfo) {
+  const balance = await getCronosBalance(ctx.from.id);
   ctx.reply(
-    `Token Information:\nName: ${tokenInfo.tokenName}\nSymbol: ${tokenInfo.tokenSymbol}\nCurrent Price (CRO): ${tokenInfo.currentPriceCRO}\nCurrent Price (USD): ${tokenInfo.currentPriceUSD}\nMarket Cap: ${tokenInfo.marketCap}\nAge of Token: ${tokenInfo.ageOfToken}\nDexScreener URL: ${tokenInfo.url}`
+    `Token Information:\n` +
+    `Name: ${tokenInfo.tokenName}\n` +
+    `Symbol: ${tokenInfo.tokenSymbol}\n` +
+    `Current Price (CRO): ${tokenInfo.currentPriceCRO}\n` +
+    `Current Price (USD): ${tokenInfo.currentPriceUSD}\n` +
+    `Market Cap: ${tokenInfo.marketCap}\n` +
+    `Age of Token: ${tokenInfo.ageOfToken}\n` +
+    `DexScreener URL: ${tokenInfo.url}\n\n` +
+    `Your CRO Balance: ${balance} CRO`
   );
 }
+
 
 async function sendBalanceAndOptions(ctx, balance) {
   ctx.reply(`Cronos Balance: ${balance}`, Markup.inlineKeyboard([
