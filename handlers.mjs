@@ -1,7 +1,10 @@
 import axios from 'axios';
+import axiosRetry from 'axios-retry';
 import { Markup } from 'telegraf';
 import Web3 from 'web3';
 import { config } from './config.mjs';
+
+axiosRetry(axios, { retries: 3, retryDelay: axiosRetry.exponentialDelay });
 
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 
