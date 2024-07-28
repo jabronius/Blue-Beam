@@ -1,11 +1,15 @@
 import axios from 'axios';
 import { Markup } from 'telegraf';
 import Web3 from 'web3';
-import { config } from './config.mjs';4
-import { getAddressByUserId } from './database.mjs';
-
+import { config } from './config.mjs';
+import { initializeDatabase, getAddressByUserId } from './database.mjs';
 
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
+let db;
+
+(async () => {
+  db = await initializeDatabase();
+})();
 
 // API endpoint
 const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
@@ -49,12 +53,35 @@ async function getTokenInfo(tokenAddress) {
   }
 }
 
+async function fetchTokenHoldings(walletAddress) {
+  // Implement your logic to fetch token holdings from the blockchain using web3
+  // This is a placeholder function, you will need to adjust it to your specific needs
+  return [
+    { token: 'TokenA', balance: 100 },
+    { token: 'TokenB', balance: 200 }
+  ];
+}
+
+async function displayHoldings(ctx, holdings, walletAddress) {
+  if (holdings.length === 0) {
+    ctx.reply('No tokens found.');
+    return;
+  }
+
+  let message = `Wallet Address: ${walletAddress}\n\nYour token holdings:\n`;
+  for (const holding of holdings) {
+    message += `${holding.token}: ${holding.balance}\n`;
+  }
+
+  ctx.reply(message);
+}
+
 async function handleStart(ctx) {
   await ctx.reply('Welcome to the Cronos Trading Bot! Please choose an option:',
     Markup.inlineKeyboard([
       Markup.button.callback('Create Wallet', 'create_wallet'),
       Markup.button.callback('Import Wallet', 'import_wallet'),
-      Markup.button.callback('Buy Token', 'buy_token')  // Added Buy Token option here
+      Markup.button.callback('Buy Token', 'buy_token')
     ])
   );
 }
@@ -66,7 +93,8 @@ async function handleCallbackQuery(ctx) {
     case 'create_wallet':
       const balance = await getCronosBalance(ctx.from.id);
       if (balance) {
-        await sendBalanceAndOptions(ctx, balance);
+        const address = await getAddressByUserId(ctx.from.id);
+        await sendBalanceAndOptions(ctx, balance, address);
       } else {
         ctx.reply("Failed to create wallet. Please try again.");
       }
@@ -74,7 +102,8 @@ async function handleCallbackQuery(ctx) {
     case 'import_wallet':
       // Assume importing wallet also checks balance
       const importedBalance = await getCronosBalance(ctx.from.id);
-      await sendBalanceAndOptions(ctx, importedBalance);
+      const importedAddress = await getAddressByUserId(ctx.from.id);
+      await sendBalanceAndOptions(ctx, importedBalance, importedAddress);
       break;
     case 'buy_token':
       console.log("Session before setting expectingTokenAddress:", ctx.session);
@@ -85,7 +114,13 @@ async function handleCallbackQuery(ctx) {
       ctx.reply('Please paste the Cronos token address.');
       break;
     case 'open_positions':
-      // Placeholder for open positions logic
+      const walletAddress = await getAddressByUserId(ctx.from.id);
+      if (!walletAddress) {
+        ctx.reply("No wallet found. Please create or import a wallet.");
+        break;
+      }
+      const holdings = await fetchTokenHoldings(walletAddress);
+      await displayHoldings(ctx, holdings, walletAddress);
       break;
     case 'help':
       ctx.reply('How can I assist you?');
@@ -99,13 +134,13 @@ async function handleCallbackQuery(ctx) {
   }
 }
 
-
 async function handleMessage(ctx) {
   if (ctx.session && ctx.session.expectingTokenAddress) {
     const tokenAddress = ctx.message.text.trim();
     const tokenInfo = await getTokenInfo(tokenAddress);
     if (tokenInfo) {
-      await sendTokenInfo(ctx, tokenInfo);
+      const userBalance = await getCronosBalance(ctx.from.id);
+      await sendTokenInfo(ctx, tokenInfo, userBalance);
     } else {
       ctx.reply('Failed to fetch token information. Please try again later.');
     }
@@ -113,24 +148,14 @@ async function handleMessage(ctx) {
   }
 }
 
-async function sendTokenInfo(ctx, tokenInfo) {
-  const balance = await getCronosBalance(ctx.from.id);
+async function sendTokenInfo(ctx, tokenInfo, userBalance) {
   ctx.reply(
-    `Token Information:\n` +
-    `Name: ${tokenInfo.tokenName}\n` +
-    `Symbol: ${tokenInfo.tokenSymbol}\n` +
-    `Current Price (CRO): ${tokenInfo.currentPriceCRO}\n` +
-    `Current Price (USD): ${tokenInfo.currentPriceUSD}\n` +
-    `Market Cap: ${tokenInfo.marketCap}\n` +
-    `Age of Token: ${tokenInfo.ageOfToken}\n` +
-    `DexScreener URL: ${tokenInfo.url}\n\n` +
-    `Your CRO Balance: ${balance} CRO`
+    `Token Information:\nName: ${tokenInfo.tokenName}\nSymbol: ${tokenInfo.tokenSymbol}\nCurrent Price (CRO): ${tokenInfo.currentPriceCRO}\nCurrent Price (USD): ${tokenInfo.currentPriceUSD}\nMarket Cap: ${tokenInfo.marketCap}\nAge of Token: ${tokenInfo.ageOfToken}\nDexScreener URL: ${tokenInfo.url}\n\nYour CRO Balance: ${userBalance}`
   );
 }
 
-
-async function sendBalanceAndOptions(ctx, balance) {
-  ctx.reply(`Cronos Balance: ${balance}`, Markup.inlineKeyboard([
+async function sendBalanceAndOptions(ctx, balance, address) {
+  ctx.reply(`Wallet Address: ${address}\nCronos Balance: ${balance}`, Markup.inlineKeyboard([
     Markup.button.callback('Buy Token', 'buy_token'),
     Markup.button.callback('Open Positions', 'open_positions'),
     Markup.button.callback('Help', 'help'),
