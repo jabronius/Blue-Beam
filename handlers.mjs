@@ -8,54 +8,51 @@ const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 // API endpoint
 const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
 
-// Placeholder function to fetch balance from Cronos network
 async function getCronosBalance(userId) {
-  // Implement actual logic to get the balance based on userId
-  return '1000'; // Replace with actual balance fetching logic
+  try {
+    const address = await getAddressByUserId(userId);
+    if (!address) {
+      console.error('User address not found');
+      return null; // Handle no address found
+    }
+    const balanceWei = await web3.eth.getBalance(address);
+    return web3.utils.fromWei(balanceWei, 'ether');
+  } catch (error) {
+    console.error('Error fetching Cronos balance:', error);
+    return null;
+  }
 }
 
 async function getTokenInfo(tokenAddress) {
   try {
-    // Check if the address is valid
-    if (!web3.utils.isAddress(tokenAddress)) {
-      throw new Error('Invalid token address.');
-    }
-
-    // Fetch data from DexScreener
-    const dexScreenerResponse = await axios.get(`${DEXS_CREENER_API_URL}${tokenAddress}`, {
+    const response = await axios.get(`${DEXS_CREENER_API_URL}${tokenAddress}`, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
       }
     });
-    const dexScreenerData = dexScreenerResponse.data;
-    console.log('DexScreener Data:', dexScreenerData); // Debugging
-
-    if (!dexScreenerData || !dexScreenerData.pairs || dexScreenerData.pairs.length === 0) {
-      throw new Error('Token information not found on DexScreener.');
-    }
-
-    const tokenInfo = dexScreenerData.pairs[0];
+    const data = response.data.pairs[0];
 
     return {
-      tokenName: tokenInfo.baseToken.name || 'N/A',
-      tokenSymbol: tokenInfo.baseToken.symbol || 'N/A',
-      currentPriceCRO: tokenInfo.priceNative || 'N/A',
-      currentPriceUSD: tokenInfo.priceUsd || 'N/A',
-      marketCap: tokenInfo.fdv || 'N/A',
-      ageOfToken: new Date(tokenInfo.pairCreatedAt).toLocaleDateString() || 'N/A',
-      url: tokenInfo.url || 'N/A'
+      tokenName: data.baseToken.name,
+      tokenSymbol: data.baseToken.symbol,
+      currentPriceCRO: data.priceNative,
+      currentPriceUSD: data.priceUsd,
+      marketCap: data.fdv,
+      ageOfToken: new Date(data.pairCreatedAt * 1000).toLocaleDateString(),
+      url: data.url
     };
   } catch (error) {
-    console.error('Error fetching token information:', error.message);
+    console.error('Error fetching token information:', error);
     return null;
   }
 }
 
 async function handleStart(ctx) {
-  ctx.reply('Welcome to the Cronos Trading Bot! Please choose an option:',
+  await ctx.reply('Welcome to the Cronos Trading Bot! Please choose an option:',
     Markup.inlineKeyboard([
       Markup.button.callback('Create Wallet', 'create_wallet'),
-      Markup.button.callback('Import Wallet', 'import_wallet')
+      Markup.button.callback('Import Wallet', 'import_wallet'),
+      Markup.button.callback('Buy Token', 'buy_token')  // Added Buy Token option here
     ])
   );
 }
@@ -65,69 +62,59 @@ async function handleCallbackQuery(ctx) {
 
   switch (action) {
     case 'create_wallet':
-      await handleCreateWallet(ctx);
+      const balance = await getCronosBalance(ctx.from.id);
+      if (balance) {
+        await sendBalanceAndOptions(ctx, balance);
+      } else {
+        ctx.reply("Failed to create wallet. Please try again.");
+      }
       break;
     case 'import_wallet':
-      await handleImportWallet(ctx);
+      // Assume importing wallet also checks balance
+      const importedBalance = await getCronosBalance(ctx.from.id);
+      await sendBalanceAndOptions(ctx, importedBalance);
       break;
     case 'buy_token':
-      ctx.reply('Please paste the Cronos token address.');
-      ctx.session = ctx.session || {};  // Initialize session if it doesn't exist
+      console.log("Session before setting expectingTokenAddress:", ctx.session);
+      if (!ctx.session) {
+        ctx.session = {}; // Ensure session object exists
+      }
       ctx.session.expectingTokenAddress = true;
+      ctx.reply('Please paste the Cronos token address.');
       break;
     case 'open_positions':
-      // Implement logic for open positions
+      // Placeholder for open positions logic
       break;
     case 'help':
-      // Implement help functionality
+      ctx.reply('How can I assist you?');
       break;
     case 'settings':
-      // Implement settings functionality
+      ctx.reply('Settings options will be here.');
       break;
     default:
-      // Handle unknown action
+      ctx.reply('Unknown command.');
       break;
   }
 }
+
 
 async function handleMessage(ctx) {
   if (ctx.session && ctx.session.expectingTokenAddress) {
     const tokenAddress = ctx.message.text.trim();
-    console.log('Received Token Address:', tokenAddress); // Debugging
-
     const tokenInfo = await getTokenInfo(tokenAddress);
-
     if (tokenInfo) {
-      ctx.reply(
-        `Token Information:\n` +
-        `Name: ${tokenInfo.tokenName}\n` +
-        `Symbol: ${tokenInfo.tokenSymbol}\n` +
-        `Current Price (CRO): ${tokenInfo.currentPriceCRO}\n` +
-        `Current Price (USD): ${tokenInfo.currentPriceUSD}\n` +
-        `Market Cap: ${tokenInfo.marketCap}\n` +
-        `Age of Token: ${tokenInfo.ageOfToken}\n` +
-        `DexScreener URL: ${tokenInfo.url}`
-      );
+      await sendTokenInfo(ctx, tokenInfo);
     } else {
       ctx.reply('Failed to fetch token information. Please try again later.');
     }
-
     ctx.session.expectingTokenAddress = false;
   }
 }
 
-async function handleCreateWallet(ctx) {
-  // Logic to create a new Cronos wallet and store securely
-  // After successful creation, display balance and options
-  const balance = await getCronosBalance(ctx.from.id);
-  await sendBalanceAndOptions(ctx, balance);
-}
-
-async function handleImportWallet(ctx) {
-  // Logic to import existing Cronos wallet using private key
-  // After successful import, display balance and options
-  const balance = await getCronosBalance(ctx.from.id);
-  await sendBalanceAndOptions(ctx, balance);
+async function sendTokenInfo(ctx, tokenInfo) {
+  ctx.reply(
+    `Token Information:\nName: ${tokenInfo.tokenName}\nSymbol: ${tokenInfo.tokenSymbol}\nCurrent Price (CRO): ${tokenInfo.currentPriceCRO}\nCurrent Price (USD): ${tokenInfo.currentPriceUSD}\nMarket Cap: ${tokenInfo.marketCap}\nAge of Token: ${tokenInfo.ageOfToken}\nDexScreener URL: ${tokenInfo.url}`
+  );
 }
 
 async function sendBalanceAndOptions(ctx, balance) {
