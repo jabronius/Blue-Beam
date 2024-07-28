@@ -1,16 +1,13 @@
 import axios from 'axios';
-import axiosRetry from 'axios-retry';
 import { Markup } from 'telegraf';
 import Web3 from 'web3';
 import { config } from './config.mjs';
-
-axiosRetry(axios, { retries: 3, retryDelay: axiosRetry.exponentialDelay });
 
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 
 // API endpoints
 const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
-const CRONOS_EXPLORER_API_URL = 'https://cronos.org/explorer/api/v1/tokens/';
+const CRONOS_EXPLORER_API_URL = 'https://cronos.org/explorer/api?module=contract&action=verify';
 
 // Placeholder function to fetch balance from Cronos network
 async function getCronosBalance(userId) {
@@ -27,10 +24,11 @@ async function validateTokenAddressOnExplorer(tokenAddress) {
     const isValid = data && data.token && data.token.address.toLowerCase() === tokenAddress.toLowerCase();
     return isValid;
   } catch (error) {
-    console.error('Error validating token address on Cronos Explorer:', error.message);
+    console.error('Error validating token address on Cronos Explorer:', error.response ? error.response.data : error.message);
     return false;
   }
 }
+
 
 async function getTokenInfo(tokenAddress) {
   try {
@@ -40,12 +38,14 @@ async function getTokenInfo(tokenAddress) {
     }
 
     // Validate the token address on Cronos Explorer
+    console.log('Validating token address on Cronos Explorer:', tokenAddress); // Debugging
     const isValid = await validateTokenAddressOnExplorer(tokenAddress);
     if (!isValid) {
       throw new Error('Token address not found on Cronos Explorer.');
     }
 
     // Fetch data from DexScreener
+    console.log('Fetching data from DexScreener:', tokenAddress); // Debugging
     const dexScreenerResponse = await axios.get(`${DEXS_CREENER_API_URL}${tokenAddress}`, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -55,6 +55,7 @@ async function getTokenInfo(tokenAddress) {
     console.log('DexScreener Data:', dexScreenerData); // Debugging
 
     // Fetch data from Cronos Explorer for additional details
+    console.log('Fetching data from Cronos Explorer:', tokenAddress); // Debugging
     const explorerResponse = await axios.get(`${CRONOS_EXPLORER_API_URL}${tokenAddress}`);
     const explorerData = explorerResponse.data;
     console.log('Explorer Data:', explorerData); // Debugging
