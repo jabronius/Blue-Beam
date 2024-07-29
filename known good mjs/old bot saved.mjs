@@ -1,24 +1,33 @@
-import { Telegraf, session } from 'telegraf'; // Import session along with Telegraf
+import { Telegraf, session } from 'telegraf';
 import dotenv from 'dotenv';
 import { handleStart, handleCallbackQuery, handleMessage } from './handlers.mjs';
 
-dotenv.config(); // This loads the .env file at the start of your application
+dotenv.config();
 
-console.log("Starting bot setup...");
-console.log("Imported handlers:", { handleStart, handleCallbackQuery, handleMessage });
+const bot = new Telegraf(process.env.TELEGRAM_API_KEY);
 
-const bot = new Telegraf(process.env.TELEGRAM_API_KEY); // Ensure this matches your .env key
-
-// Use session middleware
 bot.use(session());
 
 bot.start(handleStart);
 bot.on('callback_query', handleCallbackQuery);
 bot.on('text', handleMessage);
 
-bot.launch().then(() => {
-  console.log("Bot is running...");
-});
+const launchBot = async (retries = 5) => {
+  try {
+    await bot.launch();
+    console.log("Bot is running...");
+  } catch (error) {
+    console.error("Failed to launch bot:", error);
+    if (retries > 0) {
+      console.log(`Retrying to launch bot... (${retries} attempts left)`);
+      setTimeout(() => launchBot(retries - 1), 5000);
+    } else {
+      console.error("All retry attempts failed. Please check your network and API key.");
+    }
+  }
+};
+
+launchBot();
 
 // Enable graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));

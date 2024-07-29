@@ -2,7 +2,7 @@ import axios from 'axios';
 import { Markup } from 'telegraf';
 import Web3 from 'web3';
 import { config } from './config.mjs';
-import { initializeDatabase, getAddressByUserId } from './database.mjs';
+import { initializeDatabase, getAddressByUserId, saveUserCronosAddress } from './database.mjs';
 
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 let db;
@@ -11,15 +11,16 @@ let db;
   db = await initializeDatabase();
 })();
 
-// API endpoint
+// API endpoints
 const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
+const CRONOS_EXPLORER_API_URL = 'https://api.cronos.org/api?module=contract&action=getabi&address=';
 
 async function getCronosBalance(userId) {
   try {
     const address = await getAddressByUserId(userId);
     if (!address) {
       console.error('User address not found');
-      return null; // Handle no address found
+      return null;
     }
     const balanceWei = await web3.eth.getBalance(address);
     return web3.utils.fromWei(balanceWei, 'ether');
@@ -33,65 +34,72 @@ async function getTokenInfo(tokenAddress) {
   try {
     const response = await axios.get(`${DEXS_CREENER_API_URL}${tokenAddress}`, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0'
       }
     });
-    const data = response.data.pairs[0];
-    
-    if (!data) {
-      console.error('Error: No data found for the token address');
-      return null;
+    const data = response.data;
+    if (!data.pairs || data.pairs.length === 0) {
+      throw new Error('No pairs found for the given token address');
     }
-
-    // Calculate age of token
-    const pairCreatedAt = new Date(data.pairCreatedAt);
-    const now = new Date();
-    const ageInMilliseconds = now - pairCreatedAt;
-    const ageInDays = Math.floor(ageInMilliseconds / (1000 * 60 * 60 * 24));
-    const ageInMonths = Math.floor(ageInDays / 30);
-    const remainingDays = ageInDays % 30;
+    const pair = data.pairs[0];
 
     return {
-      tokenName: data.baseToken.name,
-      tokenSymbol: data.baseToken.symbol,
-      currentPriceCRO: data.priceNative,
-      currentPriceUSD: data.priceUsd,
-      marketCap: data.fdv,
-      ageOfToken: `${ageInMonths}mo ${remainingDays}d ago`,
-      url: data.url
+      tokenName: pair.baseToken.name,
+      tokenSymbol: pair.baseToken.symbol,
+      currentPriceCRO: pair.priceNative,
+      currentPriceUSD: pair.priceUsd,
+      marketCap: pair.fdv,
+      url: pair.url,
+      tokenAddress: tokenAddress
     };
   } catch (error) {
-    console.error('Error fetching token information:', error.message);
+    console.error('Error fetching token information:', error);
+    return null;
+  }
+}
+
+async function fetchTokenABI(tokenAddress) {
+  try {
+    const response = await axios.get(`${CRONOS_EXPLORER_API_URL}${tokenAddress}`);
+    const abi = JSON.parse(response.data.result);
+    return abi;
+  } catch (error) {
+    console.error('Error fetching token ABI:', error);
     return null;
   }
 }
 
 async function fetchTokenHoldings(walletAddress) {
   // Implement your logic to fetch token holdings from the blockchain using web3
-  // This is a placeholder function, you will need to adjust it to your specific needs
-  try {
-    return [
-      { token: 'TokenA', balance: 100 },
-      { token: 'TokenB', balance: 200 }
-    ];
-  } catch (error) {
-    console.error('Error fetching token holdings:', error);
-    return [];
-  }
+  // Placeholder function, you need to adjust it to your specific needs
+  return [];
 }
 
-async function displayHoldings(ctx, holdings, walletAddress) {
+async function displayHoldings(ctx, walletAddress, holdings) {
   if (holdings.length === 0) {
-    ctx.reply('No tokens found.');
+    await ctx.reply(`Wallet Address: ${walletAddress}\nYour token holdings: Currently no open positions.`, Markup.inlineKeyboard([
+      Markup.button.callback('BUY', 'buy_token'),
+      Markup.button.callback('Paste Token', 'paste_token')
+    ]));
     return;
   }
 
   let message = `Wallet Address: ${walletAddress}\nYour token holdings:\n`;
   for (const holding of holdings) {
-    message += `${holding.token}: ${holding.balance}\n`;
+    const tokenInfo = await getTokenInfo(holding.token);
+    if (tokenInfo) {
+      const valueUSD = holding.balance * tokenInfo.currentPriceUSD;
+      const valueCRO = holding.balance * tokenInfo.currentPriceCRO;
+      message += `Token Name: ${tokenInfo.tokenName}\nSymbol: ${tokenInfo.tokenSymbol}\nAmount: ${holding.balance}\nValue (USD): ${valueUSD}\nValue (CRO): ${valueCRO}\n\n`;
+    } else {
+      message += `${holding.token}: ${holding.balance}\n`;
+    }
   }
 
-  ctx.reply(message);
+  await ctx.reply(message, Markup.inlineKeyboard([
+    Markup.button.callback('BUY', 'buy_token'),
+    Markup.button.callback('Paste Token', 'paste_token')
+  ]));
 }
 
 async function handleStart(ctx) {
@@ -99,7 +107,7 @@ async function handleStart(ctx) {
     Markup.inlineKeyboard([
       Markup.button.callback('Create Wallet', 'create_wallet'),
       Markup.button.callback('Import Wallet', 'import_wallet'),
-      Markup.button.callback('Paste Token', 'buy_token')  // Changed Buy Token to Paste Token
+      Markup.button.callback('Paste Token', 'paste_token')
     ])
   );
 }
@@ -117,17 +125,23 @@ async function handleCallbackQuery(ctx) {
       }
       break;
     case 'import_wallet':
-      // Assume importing wallet also checks balance
       const importedBalance = await getCronosBalance(ctx.from.id);
       await sendBalanceAndOptions(ctx, importedBalance);
       break;
-    case 'buy_token':
-      console.log("Session before setting expectingTokenAddress:", ctx.session);
+    case 'paste_token':
       if (!ctx.session) {
-        ctx.session = {}; // Ensure session object exists
+        ctx.session = {};
       }
       ctx.session.expectingTokenAddress = true;
       ctx.reply('Please paste the Cronos token address.');
+      break;
+    case 'buy_token':
+      if (!ctx.session || !ctx.session.tokenInfo) {
+        ctx.reply('Please paste a token address first.');
+        break;
+      }
+      ctx.session.expectingBuyAmount = true;
+      ctx.reply(`Enter the amount in CRO to purchase ${ctx.session.tokenInfo.tokenSymbol}:`);
       break;
     case 'open_positions':
       const walletAddress = await getAddressByUserId(ctx.from.id);
@@ -136,7 +150,7 @@ async function handleCallbackQuery(ctx) {
         break;
       }
       const holdings = await fetchTokenHoldings(walletAddress);
-      await displayHoldings(ctx, holdings, walletAddress);
+      await displayHoldings(ctx, walletAddress, holdings);
       break;
     case 'help':
       ctx.reply('How can I assist you?');
@@ -151,34 +165,74 @@ async function handleCallbackQuery(ctx) {
 }
 
 async function handleMessage(ctx) {
-  if (ctx.session && ctx.session.expectingTokenAddress) {
-    const tokenAddress = ctx.message.text.trim();
-    const tokenInfo = await getTokenInfo(tokenAddress);
-    if (tokenInfo) {
-      const userBalance = await getCronosBalance(ctx.from.id);
-      await sendTokenInfo(ctx, tokenInfo, userBalance);
-    } else {
-      ctx.reply('Failed to fetch token information. Please try again later.');
+  if (ctx.session) {
+    if (ctx.session.expectingTokenAddress) {
+      const tokenAddress = ctx.message.text.trim();
+      const tokenInfo = await getTokenInfo(tokenAddress);
+      if (tokenInfo) {
+        ctx.session.tokenInfo = tokenInfo;
+        const userBalance = await getCronosBalance(ctx.from.id);
+        await sendTokenInfo(ctx, tokenInfo, userBalance);
+      } else {
+        ctx.reply('Failed to fetch token information. Please try again later.');
+      }
+      ctx.session.expectingTokenAddress = false;
+    } else if (ctx.session.expectingBuyAmount) {
+      const amountInCRO = parseFloat(ctx.message.text.trim());
+      if (isNaN(amountInCRO) || amountInCRO <= 0) {
+        ctx.reply('Invalid amount. Please enter a valid number.');
+        return;
+      }
+
+      const userAddress = await getAddressByUserId(ctx.from.id);
+      const privateKey = config.privateKey;
+
+      const tokenAddress = ctx.session.tokenInfo.tokenAddress;
+      const abi = await fetchTokenABI(tokenAddress);
+      if (!abi) {
+        ctx.reply('Failed to fetch token ABI. Please try again later.');
+        return;
+      }
+      const tokenContract = new web3.eth.Contract(abi, tokenAddress);
+
+      try {
+        const tx = {
+          from: userAddress,
+          to: tokenAddress,
+          data: tokenContract.methods.buyToken().encodeABI(),
+          value: web3.utils.toWei(amountInCRO.toString(), 'ether'),
+          gas: 2000000,
+        };
+
+        const signedTx = await web3.eth.accounts.signTransaction(tx, privateKey);
+        const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
+
+        ctx.reply(`Successfully bought ${ctx.session.tokenInfo.tokenSymbol}. Transaction receipt: ${receipt.transactionHash}`);
+        await saveUserCronosAddress(ctx.from.id, userAddress, ctx.session.tokenInfo.tokenSymbol);
+      } catch (error) {
+        console.error('Error buying token:', error);
+        ctx.reply('Failed to buy token. Please try again later.');
+      }
+
+      ctx.session.expectingBuyAmount = false;
     }
-    ctx.session.expectingTokenAddress = false;
   }
 }
 
 async function sendTokenInfo(ctx, tokenInfo, userBalance) {
   ctx.reply(
-    `Token Information:\nName: ${tokenInfo.tokenName}\nSymbol: ${tokenInfo.tokenSymbol}\nCurrent Price (CRO): ${tokenInfo.currentPriceCRO}\nCurrent Price (USD): ${tokenInfo.currentPriceUSD}\nMarket Cap: ${tokenInfo.marketCap}\nPair created ${tokenInfo.ageOfToken}\nDexScreener URL: ${tokenInfo.url}\n\nYour CRO Balance: ${userBalance}`,
+    `Token Information:\nName: ${tokenInfo.tokenName}\nSymbol: ${tokenInfo.tokenSymbol}\nCurrent Price (CRO): ${tokenInfo.currentPriceCRO}\nCurrent Price (USD): ${tokenInfo.currentPriceUSD}\nMarket Cap: ${tokenInfo.marketCap}\nDexScreener URL: ${tokenInfo.url}\n\nYour CRO Balance: ${userBalance}`,
     Markup.inlineKeyboard([
-      Markup.button.callback('BUY', 'buy_token_action'), // New BUY button
+      Markup.button.callback('BUY', 'buy_token'),
       Markup.button.callback('Open Positions', 'open_positions'),
-      Markup.button.callback('Paste Token', 'buy_token')  // Changed Buy Token to Paste Token
+      Markup.button.callback('Paste Token', 'paste_token')
     ])
   );
 }
 
 async function sendBalanceAndOptions(ctx, balance) {
-  const address = await getAddressByUserId(ctx.from.id);
-  ctx.reply(`Wallet Address: ${address}\nCronos Balance: ${balance}`, Markup.inlineKeyboard([
-    Markup.button.callback('Paste Token', 'buy_token'),  // Changed Buy Token to Paste Token
+  ctx.reply(`Cronos Balance: ${balance}`, Markup.inlineKeyboard([
+    Markup.button.callback('Paste Token', 'paste_token'),
     Markup.button.callback('Open Positions', 'open_positions'),
     Markup.button.callback('Help', 'help'),
     Markup.button.callback('Settings', 'settings')
