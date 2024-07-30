@@ -1,8 +1,12 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import dotenv from 'dotenv';
+import Web3 from 'web3';
+import { fetchTokenABI, getTokenInfo } from './handlers.mjs'; // Ensure these functions are correctly imported
 
 dotenv.config(); // Load environment variables from .env file
+
+const web3 = new Web3(new Web3.providers.HttpProvider(process.env.CRONOS_NODE_URL));
 
 // Initialize and open the database connection
 async function initializeDatabase() {
@@ -25,7 +29,50 @@ async function initializeDatabase() {
     );
   `);
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS open_positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegramUserId INTEGER,
+      tokenAddress TEXT,
+      balance REAL,
+      valueUSD REAL,
+      lastUpdated DATETIME,
+      FOREIGN KEY (telegramUserId) REFERENCES users (telegramUserId)
+    );
+  `);
+
   return db;
+}
+
+async function fetchTokenBalance(tokenAddress, userId) {
+  const userAddress = await getAddressByUserId(userId);
+  const abi = await fetchTokenABI(tokenAddress);
+  const tokenContract = new web3.eth.Contract(abi, tokenAddress);
+  const balance = await tokenContract.methods.balanceOf(userAddress).call();
+  return web3.utils.fromWei(balance, 'ether');
+}
+
+async function saveTradeData(userId, tokenAddress, amountInCRO) {
+  const db = await initializeDatabase();
+  try {
+    // Get current token balance and value in USD
+    const tokenInfo = await getTokenInfo(tokenAddress);
+    const balance = await fetchTokenBalance(tokenAddress, userId);
+    const valueUSD = balance * tokenInfo.currentPriceUSD;
+
+    // Check if token already exists in the user's open positions
+    const existingToken = await db.get('SELECT id FROM open_positions WHERE telegramUserId = ? AND tokenAddress = ?', [userId, tokenAddress]);
+
+    if (existingToken) {
+      // Update existing token position
+      await db.run('UPDATE open_positions SET balance = ?, valueUSD = ?, lastUpdated = ? WHERE id = ?', [balance, valueUSD, new Date(), existingToken.id]);
+    } else {
+      // Insert new token position
+      await db.run('INSERT INTO open_positions (telegramUserId, tokenAddress, balance, valueUSD, lastUpdated) VALUES (?, ?, ?, ?, ?)', [userId, tokenAddress, balance, valueUSD, new Date()]);
+    }
+  } catch (error) {
+    console.error('Failed to save trade data:', error);
+  }
 }
 
 // Fetch user's Cronos address by their Telegram user ID
@@ -58,4 +105,4 @@ async function saveUserCronosAddress(userId, cronosAddress, mnemonic) {
   }
 }
 
-export { initializeDatabase, getAddressByUserId, saveUserCronosAddress };
+export { initializeDatabase, getAddressByUserId, saveUserCronosAddress, fetchTokenBalance, saveTradeData };

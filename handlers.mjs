@@ -220,8 +220,10 @@ async function handleMessage(ctx) {
         const signedTx = await web3.eth.accounts.signTransaction(tx, privateKey);
         const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
 
+        // Store the trade data in the database
+        await saveTradeData(ctx.from.id, tokenAddress, amountInCRO);
+
         ctx.reply(`Successfully bought ${ctx.session.tokenInfo.tokenSymbol}. Transaction receipt: ${receipt.transactionHash}`);
-        await saveUserCronosAddress(ctx.from.id, userAddress, ctx.session.tokenInfo.tokenSymbol);
       } catch (error) {
         console.error('Error buying token:', error);
         ctx.reply('Failed to buy token. Please try again later.');
