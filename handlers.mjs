@@ -254,4 +254,4 @@ async function sendBalanceAndOptions(ctx, balance) {
   ]));
 }
 
-export { handleStart, handleCallbackQuery, handleMessage };
+export { handleStart, handleCallbackQuery, handleMessage, fetchTokenABI, getTokenInfo };
