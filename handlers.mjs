@@ -1,8 +1,13 @@
 import axios from 'axios';
 import { Markup } from 'telegraf';
 import Web3 from 'web3';
-import { config } from './config.mjs';
+import bip39 from 'bip39';
 import { initializeDatabase, getAddressByUserId, saveUserCronosAddress } from './database.mjs';
+import { config } from './config.mjs';
+
+// Corrected import for CommonJS module
+import wallet from 'ethereumjs-wallet';
+const { hdkey } = wallet;
 
 const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 let db;
@@ -117,7 +122,15 @@ async function handleCallbackQuery(ctx) {
 
   switch (action) {
     case 'create_wallet':
+      const mnemonic = bip39.generateMnemonic();
+      const seed = await bip39.mnemonicToSeed(mnemonic);
+      const hdWallet = hdkey.fromMasterSeed(seed);
+      const key = hdWallet.derivePath("m/44'/60'/0'/0/0");
+      const wallet = key.getWallet();
+      const address = wallet.getChecksumAddressString();
+      await saveUserCronosAddress(ctx.from.id, address, mnemonic);
       const balance = await getCronosBalance(ctx.from.id);
+      await ctx.reply(`Wallet created! Address: ${address}`);
       if (balance) {
         await sendBalanceAndOptions(ctx, balance);
       } else {
