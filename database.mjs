@@ -3,10 +3,12 @@ import { open } from 'sqlite';
 import dotenv from 'dotenv';
 import Web3 from 'web3';
 import { fetchTokenABI, getTokenInfo } from './handlers.mjs';
+import { config } from './config.mjs'; // Add this import
 
 dotenv.config();
 
-const web3 = new Web3(new Web3.providers.HttpProvider(process.env.CRONOS_NODE_URL));
+const web3Mainnet = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
+const web3Testnet = new Web3(new Web3.providers.HttpProvider(config.tcronosRpcUrl));
 
 async function initializeDatabase() {
   const db = await open({
@@ -41,17 +43,18 @@ async function initializeDatabase() {
   return db;
 }
 
-async function fetchTokenBalance(tokenAddress, userId) {
+async function fetchTokenBalance(tokenAddress, userId, network) {
   const userAddress = await getAddressByUserId(userId);
-  const balance = await web3.eth.getBalance(userAddress); // Fetch CRO balance directly
+  const web3 = network === 'testnet' ? web3Testnet : web3Mainnet;
+  const balance = await web3.eth.getBalance(userAddress); // Fetch tCRO or CRO balance directly
   return web3.utils.fromWei(balance, 'ether');
 }
 
-async function saveTradeData(userId, tokenAddress, amountInCRO) {
+async function saveTradeData(userId, tokenAddress, amountInCRO, network) {
   const db = await initializeDatabase();
   try {
-    const balance = await fetchTokenBalance(tokenAddress, userId); // Updated to fetch balance directly
-    const valueUSD = balance * await getTokenUSDValue(tokenAddress); // Assuming getTokenUSDValue fetches the USD value of CRO
+    const balance = await fetchTokenBalance(tokenAddress, userId, network); // Updated to fetch balance directly
+    const valueUSD = balance * await getTokenUSDValue(tokenAddress, network); // Assuming getTokenUSDValue fetches the USD value of CRO or tCRO
 
     const existingToken = await db.get('SELECT id FROM open_positions WHERE telegramUserId = ? AND tokenAddress = ?', [userId, tokenAddress]);
 

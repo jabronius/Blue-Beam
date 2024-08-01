@@ -8,9 +8,7 @@ import { config } from './config.mjs';
 import wallet from 'ethereumjs-wallet';
 const { hdkey } = wallet;
 
-const web3 = new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 let db;
-
 (async () => {
   db = await initializeDatabase();
 })();
@@ -18,13 +16,21 @@ let db;
 const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
 const CRONOS_EXPLORER_API_URL = 'https://api.cronos.org/api?module=contract&action=getabi&address=';
 
-async function getCronosBalance(userId) {
+function getWeb3Instance(network) {
+  if (network === 'testnet') {
+    return new Web3(new Web3.providers.HttpProvider(config.tcronosRpcUrl));
+  }
+  return new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
+}
+
+async function getCronosBalance(userId, network) {
   try {
     const address = await getAddressByUserId(userId);
     if (!address) {
       console.error('User address not found');
       return null;
     }
+    const web3 = getWeb3Instance(network);
     const balanceWei = await web3.eth.getBalance(address);
     return web3.utils.fromWei(balanceWei, 'ether');
   } catch (error) {
@@ -72,27 +78,28 @@ async function fetchTokenABI(tokenAddress) {
   }
 }
 
-async function fetchTokenHoldings(walletAddress) {
+async function fetchTokenHoldings(walletAddress, network) {
   // Placeholder implementation
   return [];
 }
 
-async function getTokenUSDValue(token) {
+async function getTokenUSDValue(token, network) {
   // Placeholder for actual implementation to get USD value of a token
-  // For CRO, assume 1 CRO = 0.1 USD as an example, replace with real API call if needed
-  if (token === 'CRO') {
-    return 0.1;
+  // Replace with real API call if needed
+  if (token === 'CRO' || token === 'tCRO') {
+    return 0.1; // Example value, replace with actual
   }
   return 0;
 }
 
-async function displayHoldings(ctx, walletAddress, holdings) {
+async function displayHoldings(ctx, walletAddress, holdings, network) {
+  const web3 = getWeb3Instance(network);
   const balanceWei = await web3.eth.getBalance(walletAddress);
   const balance = Number(web3.utils.fromWei(balanceWei, 'ether'));
-  const valueUSD = balance * await getTokenUSDValue('CRO');
-  
+  const valueUSD = balance * await getTokenUSDValue(network === 'testnet' ? 'tCRO' : 'CRO', network);
+
   holdings.push({
-    token: 'CRO',
+    token: network === 'testnet' ? 'tCRO' : 'CRO',
     balance: balance,
     valueUSD: valueUSD
   });
@@ -105,7 +112,7 @@ async function displayHoldings(ctx, walletAddress, holdings) {
     return;
   }
 
-  let message = `Wallet Address: ${walletAddress}\nYour token holdings:\n`;
+  let message = `Wallet Address: ${walletAddress}\nYour token holdings on Cronos ${network}:\n`;
   for (const holding of holdings) {
     message += `Token Name: ${holding.token}\nAmount: ${holding.balance}\nValue (USD): ${holding.valueUSD}\n\n`;
   }
@@ -138,17 +145,17 @@ async function handleCallbackQuery(ctx) {
       const wallet = key.getWallet();
       const address = wallet.getChecksumAddressString();
       await saveUserCronosAddress(ctx.from.id, address, mnemonic);
-      const balance = await getCronosBalance(ctx.from.id);
+      const balance = await getCronosBalance(ctx.from.id, 'mainnet');
       await ctx.reply(`Wallet created! Address: ${address}`);
       if (balance) {
-        await sendBalanceAndOptions(ctx, balance);
+        await sendBalanceAndOptions(ctx, balance, 'mainnet');
       } else {
         ctx.reply("Failed to create wallet. Please try again.");
       }
       break;
     case 'import_wallet':
-      const importedBalance = await getCronosBalance(ctx.from.id);
-      await sendBalanceAndOptions(ctx, importedBalance);
+      const importedBalance = await getCronosBalance(ctx.from.id, 'mainnet');
+      await sendBalanceAndOptions(ctx, importedBalance, 'mainnet');
       break;
     case 'paste_token':
       if (!ctx.session) {
@@ -163,16 +170,10 @@ async function handleCallbackQuery(ctx) {
         break;
       }
       ctx.session.expectingBuyAmount = true;
-      ctx.reply(`Enter the amount in CRO to purchase ${ctx.session.tokenInfo.tokenSymbol}:`);
+      ctx.reply(`Enter the amount in ${ctx.session.network === 'testnet' ? 'tCRO' : 'CRO'} to purchase ${ctx.session.tokenInfo.tokenSymbol}:`);
       break;
     case 'open_positions':
-      const walletAddress = await getAddressByUserId(ctx.from.id);
-      if (!walletAddress) {
-        ctx.reply("No wallet found. Please create or import a wallet.");
-        break;
-      }
-      const holdings = await fetchTokenHoldings(walletAddress);
-      await displayHoldings(ctx, walletAddress, holdings);
+      await displayCombinedHoldings(ctx);
       break;
     case 'help':
       ctx.reply('How can I assist you?');
@@ -193,8 +194,8 @@ async function handleMessage(ctx) {
       const tokenInfo = await getTokenInfo(tokenAddress);
       if (tokenInfo) {
         ctx.session.tokenInfo = tokenInfo;
-        const userBalance = await getCronosBalance(ctx.from.id);
-        await sendTokenInfo(ctx, tokenInfo, userBalance);
+        const userBalance = await getCronosBalance(ctx.from.id, 'mainnet');
+        await sendTokenInfo(ctx, tokenInfo, userBalance, 'mainnet');
       } else {
         ctx.reply('Failed to fetch token information. Please try again later.');
       }
@@ -227,9 +228,9 @@ async function handleMessage(ctx) {
   }
 }
 
-async function sendTokenInfo(ctx, tokenInfo, userBalance) {
+async function sendTokenInfo(ctx, tokenInfo, userBalance, network) {
   ctx.reply(
-    `Token Information:\nName: ${tokenInfo.tokenName}\nSymbol: ${tokenInfo.tokenSymbol}\nCurrent Price (CRO): ${tokenInfo.currentPriceCRO}\nCurrent Price (USD): ${tokenInfo.currentPriceUSD}\nMarket Cap: ${tokenInfo.marketCap}\nDexScreener URL: ${tokenInfo.url}\n\nYour CRO Balance: ${userBalance}`,
+    `Token Information:\nName: ${tokenInfo.tokenName}\nSymbol: ${tokenInfo.tokenSymbol}\nCurrent Price (${network === 'testnet' ? 'tCRO' : 'CRO'}): ${tokenInfo.currentPriceCRO}\nCurrent Price (USD): ${tokenInfo.currentPriceUSD}\nMarket Cap: ${tokenInfo.marketCap}\nDexScreener URL: ${tokenInfo.url}\n\nYour ${network === 'testnet' ? 'tCRO' : 'CRO'} Balance: ${userBalance}`,
     Markup.inlineKeyboard([
       Markup.button.callback('BUY', 'buy_token'),
       Markup.button.callback('Open Positions', 'open_positions'),
@@ -238,12 +239,39 @@ async function sendTokenInfo(ctx, tokenInfo, userBalance) {
   );
 }
 
-async function sendBalanceAndOptions(ctx, balance) {
-  ctx.reply(`Cronos Balance: ${balance}`, Markup.inlineKeyboard([
+async function sendBalanceAndOptions(ctx, balance, network) {
+  ctx.reply(`Cronos ${network === 'testnet' ? 'Testnet' : 'Mainnet'} Balance: ${balance} ${network === 'testnet' ? 'tCRO' : 'CRO'}`, Markup.inlineKeyboard([
     Markup.button.callback('Paste Token', 'paste_token'),
     Markup.button.callback('Open Positions', 'open_positions'),
     Markup.button.callback('Help', 'help'),
     Markup.button.callback('Settings', 'settings')
+  ]));
+}
+
+async function displayCombinedHoldings(ctx) {
+  const walletAddress = await getAddressByUserId(ctx.from.id);
+  if (!walletAddress) {
+    ctx.reply("No wallet found. Please create or import a wallet.");
+    return;
+  }
+  const mainnetHoldings = await fetchTokenHoldings(walletAddress, 'mainnet');
+  const testnetHoldings = await fetchTokenHoldings(walletAddress, 'testnet');
+
+  let message = `Wallet Address: ${walletAddress}\n\n`;
+  
+  message += `Your token holdings on Cronos Mainnet:\n`;
+  for (const holding of mainnetHoldings) {
+    message += `Token Name: ${holding.token}\nAmount: ${holding.balance}\nValue (USD): ${holding.valueUSD}\n\n`;
+  }
+
+  message += `Your token holdings on Cronos Testnet:\n`;
+  for (const holding of testnetHoldings) {
+    message += `Token Name: ${holding.token}\nAmount: ${holding.balance}\nValue (USD): ${holding.valueUSD}\n\n`;
+  }
+
+  await ctx.reply(message, Markup.inlineKeyboard([
+    Markup.button.callback('BUY', 'buy_token'),
+    Markup.button.callback('Paste Token', 'paste_token')
   ]));
 }
 

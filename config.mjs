@@ -14,5 +14,12 @@ export const config = {
   cronosRpcUrl: process.env.CRONOS_NODE_URL,
   privateKey: process.env.PRIVATE_KEY,
   devAccount: process.env.DEV_ACCOUNT_ADDRESS,
-  cronosExplorerApiKey: process.env.CRONOS_EXPLORER_API_KEY
+  cronosExplorerApiKey: process.env.CRONOS_EXPLORER_API_KEY,
+  cronosChainId: 25, // Mainnet Chain ID
+  cronosSymbol: 'CRO',
+  cronosExplorerUrl: 'https://cronos.org/explorer',
+  tcronosRpcUrl: 'https://evm-t3.cronos.org',
+  tcronosChainId: 338,
+  tcronosSymbol: 'tCRO',
+  tcronosExplorerUrl: 'https://explorer.cronos.org/testnet'
 };
