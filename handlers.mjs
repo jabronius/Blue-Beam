@@ -17,13 +17,17 @@ const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
 const CRONOS_EXPLORER_API_URL = 'https://api.cronos.org/api?module=contract&action=getabi&address=';
 
 function getWeb3Instance(network) {
-  if (network === 'testnet') {
-    return new Web3(new Web3.providers.HttpProvider(config.tcronosRpcUrl));
+  switch (network) {
+    case 'testnet':
+      return new Web3(new Web3.providers.HttpProvider(config.tcronosRpcUrl));
+    case 'zkEVM':
+      return new Web3(new Web3.providers.HttpProvider(config.zkCronosRpcUrl));
+    default:
+      return new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
   }
-  return new Web3(new Web3.providers.HttpProvider(config.cronosRpcUrl));
 }
 
-async function getCronosBalance(userId, network) {
+async function getCronosBalance(userId, network, retries = 3) {
   try {
     const address = await getAddressByUserId(userId);
     if (!address) {
@@ -34,7 +38,10 @@ async function getCronosBalance(userId, network) {
     const balanceWei = await web3.eth.getBalance(address);
     return web3.utils.fromWei(balanceWei, 'ether');
   } catch (error) {
-    console.error('Error fetching Cronos balance:', error);
+    console.error(`Error fetching Cronos balance (attempt ${4 - retries}):`, error);
+    if (retries > 0) {
+      return getCronosBalance(userId, network, retries - 1);
+    }
     return null;
   }
 }
@@ -79,48 +86,25 @@ async function fetchTokenABI(tokenAddress) {
 }
 
 async function fetchTokenHoldings(walletAddress, network) {
-  // Placeholder implementation
-  return [];
+  const web3 = getWeb3Instance(network);
+  const balanceWei = await web3.eth.getBalance(walletAddress);
+  const balance = web3.utils.fromWei(balanceWei, 'ether');
+  const valueUSD = balance * await getTokenUSDValue(network === 'testnet' ? 'tCRO' : (network === 'zkEVM' ? 'zkCRO' : 'CRO'), network);
+
+  return [{
+    token: network === 'testnet' ? 'tCRO' : (network === 'zkEVM' ? 'zkCRO' : 'CRO'),
+    balance: balance,
+    valueUSD: valueUSD
+  }];
 }
 
 async function getTokenUSDValue(token, network) {
   // Placeholder for actual implementation to get USD value of a token
   // Replace with real API call if needed
-  if (token === 'CRO' || token === 'tCRO') {
+  if (token === 'CRO' || token === 'tCRO' || token === 'zkCRO') {
     return 0.1; // Example value, replace with actual
   }
   return 0;
-}
-
-async function displayHoldings(ctx, walletAddress, holdings, network) {
-  const web3 = getWeb3Instance(network);
-  const balanceWei = await web3.eth.getBalance(walletAddress);
-  const balance = Number(web3.utils.fromWei(balanceWei, 'ether'));
-  const valueUSD = balance * await getTokenUSDValue(network === 'testnet' ? 'tCRO' : 'CRO', network);
-
-  holdings.push({
-    token: network === 'testnet' ? 'tCRO' : 'CRO',
-    balance: balance,
-    valueUSD: valueUSD
-  });
-
-  if (holdings.length === 0) {
-    await ctx.reply(`Wallet Address: ${walletAddress}\nYour token holdings: Currently no open positions.`, Markup.inlineKeyboard([
-      Markup.button.callback('BUY', 'buy_token'),
-      Markup.button.callback('Paste Token', 'paste_token')
-    ]));
-    return;
-  }
-
-  let message = `Wallet Address: ${walletAddress}\nYour token holdings on Cronos ${network}:\n`;
-  for (const holding of holdings) {
-    message += `Token Name: ${holding.token}\nAmount: ${holding.balance}\nValue (USD): ${holding.valueUSD}\n\n`;
-  }
-
-  await ctx.reply(message, Markup.inlineKeyboard([
-    Markup.button.callback('BUY', 'buy_token'),
-    Markup.button.callback('Paste Token', 'paste_token')
-  ]));
 }
 
 async function handleStart(ctx) {
@@ -170,7 +154,7 @@ async function handleCallbackQuery(ctx) {
         break;
       }
       ctx.session.expectingBuyAmount = true;
-      ctx.reply(`Enter the amount in ${ctx.session.network === 'testnet' ? 'tCRO' : 'CRO'} to purchase ${ctx.session.tokenInfo.tokenSymbol}:`);
+      ctx.reply(`Enter the amount in ${ctx.session.network === 'testnet' ? 'tCRO' : (ctx.session.network === 'zkEVM' ? 'zkCRO' : 'CRO')} to purchase ${ctx.session.tokenInfo.tokenSymbol}:`);
       break;
     case 'open_positions':
       await displayCombinedHoldings(ctx);
@@ -230,7 +214,7 @@ async function handleMessage(ctx) {
 
 async function sendTokenInfo(ctx, tokenInfo, userBalance, network) {
   ctx.reply(
-    `Token Information:\nName: ${tokenInfo.tokenName}\nSymbol: ${tokenInfo.tokenSymbol}\nCurrent Price (${network === 'testnet' ? 'tCRO' : 'CRO'}): ${tokenInfo.currentPriceCRO}\nCurrent Price (USD): ${tokenInfo.currentPriceUSD}\nMarket Cap: ${tokenInfo.marketCap}\nDexScreener URL: ${tokenInfo.url}\n\nYour ${network === 'testnet' ? 'tCRO' : 'CRO'} Balance: ${userBalance}`,
+    `Token Information:\nName: ${tokenInfo.tokenName}\nSymbol: ${tokenInfo.tokenSymbol}\nCurrent Price (${network === 'testnet' ? 'tCRO' : (network === 'zkEVM' ? 'zkCRO' : 'CRO')}): ${tokenInfo.currentPriceCRO}\nCurrent Price (USD): ${tokenInfo.currentPriceUSD}\nMarket Cap: ${tokenInfo.marketCap}\nDexScreener URL: ${tokenInfo.url}\n\nYour ${network === 'testnet' ? 'tCRO' : (network === 'zkEVM' ? 'zkCRO' : 'CRO')} Balance: ${userBalance}`,
     Markup.inlineKeyboard([
       Markup.button.callback('BUY', 'buy_token'),
       Markup.button.callback('Open Positions', 'open_positions'),
@@ -240,7 +224,7 @@ async function sendTokenInfo(ctx, tokenInfo, userBalance, network) {
 }
 
 async function sendBalanceAndOptions(ctx, balance, network) {
-  ctx.reply(`Cronos ${network === 'testnet' ? 'Testnet' : 'Mainnet'} Balance: ${balance} ${network === 'testnet' ? 'tCRO' : 'CRO'}`, Markup.inlineKeyboard([
+  ctx.reply(`Cronos ${network === 'testnet' ? 'Testnet' : (network === 'zkEVM' ? 'zkEVM' : 'Mainnet')} Balance: ${balance} ${network === 'testnet' ? 'tCRO' : (network === 'zkEVM' ? 'zkCRO' : 'CRO')}`, Markup.inlineKeyboard([
     Markup.button.callback('Paste Token', 'paste_token'),
     Markup.button.callback('Open Positions', 'open_positions'),
     Markup.button.callback('Help', 'help'),
@@ -256,6 +240,7 @@ async function displayCombinedHoldings(ctx) {
   }
   const mainnetHoldings = await fetchTokenHoldings(walletAddress, 'mainnet');
   const testnetHoldings = await fetchTokenHoldings(walletAddress, 'testnet');
+  const zkEvmHoldings = await fetchTokenHoldings(walletAddress, 'zkEVM');
 
   let message = `Wallet Address: ${walletAddress}\n\n`;
   
@@ -266,6 +251,11 @@ async function displayCombinedHoldings(ctx) {
 
   message += `Your token holdings on Cronos Testnet:\n`;
   for (const holding of testnetHoldings) {
+    message += `Token Name: ${holding.token}\nAmount: ${holding.balance}\nValue (USD): ${holding.valueUSD}\n\n`;
+  }
+
+  message += `Your token holdings on Cronos zkEVM:\n`;
+  for (const holding of zkEvmHoldings) {
     message += `Token Name: ${holding.token}\nAmount: ${holding.balance}\nValue (USD): ${holding.valueUSD}\n\n`;
   }
 
