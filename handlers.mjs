@@ -5,7 +5,6 @@ import bip39 from 'bip39';
 import { initializeDatabase, getAddressByUserId, saveUserCronosAddress } from './database.mjs';
 import { config } from './config.mjs';
 
-// Corrected import for CommonJS module
 import wallet from 'ethereumjs-wallet';
 const { hdkey } = wallet;
 
@@ -16,7 +15,6 @@ let db;
   db = await initializeDatabase();
 })();
 
-// API endpoints
 const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
 const CRONOS_EXPLORER_API_URL = 'https://api.cronos.org/api?module=contract&action=getabi&address=';
 
@@ -75,12 +73,30 @@ async function fetchTokenABI(tokenAddress) {
 }
 
 async function fetchTokenHoldings(walletAddress) {
-  // Implement your logic to fetch token holdings from the blockchain using web3
-  // Placeholder function, you need to adjust it to your specific needs
+  // Placeholder implementation
   return [];
 }
 
+async function getTokenUSDValue(token) {
+  // Placeholder for actual implementation to get USD value of a token
+  // For CRO, assume 1 CRO = 0.1 USD as an example, replace with real API call if needed
+  if (token === 'CRO') {
+    return 0.1;
+  }
+  return 0;
+}
+
 async function displayHoldings(ctx, walletAddress, holdings) {
+  const balanceWei = await web3.eth.getBalance(walletAddress);
+  const balance = Number(web3.utils.fromWei(balanceWei, 'ether'));
+  const valueUSD = balance * await getTokenUSDValue('CRO');
+  
+  holdings.push({
+    token: 'CRO',
+    balance: balance,
+    valueUSD: valueUSD
+  });
+
   if (holdings.length === 0) {
     await ctx.reply(`Wallet Address: ${walletAddress}\nYour token holdings: Currently no open positions.`, Markup.inlineKeyboard([
       Markup.button.callback('BUY', 'buy_token'),
@@ -91,14 +107,7 @@ async function displayHoldings(ctx, walletAddress, holdings) {
 
   let message = `Wallet Address: ${walletAddress}\nYour token holdings:\n`;
   for (const holding of holdings) {
-    const tokenInfo = await getTokenInfo(holding.token);
-    if (tokenInfo) {
-      const valueUSD = holding.balance * tokenInfo.currentPriceUSD;
-      const valueCRO = holding.balance * tokenInfo.currentPriceCRO;
-      message += `Token Name: ${tokenInfo.tokenName}\nSymbol: ${tokenInfo.tokenSymbol}\nAmount: ${holding.balance}\nValue (USD): ${valueUSD}\nValue (CRO): ${valueCRO}\n\n`;
-    } else {
-      message += `${holding.token}: ${holding.balance}\n`;
-    }
+    message += `Token Name: ${holding.token}\nAmount: ${holding.balance}\nValue (USD): ${holding.valueUSD}\n\n`;
   }
 
   await ctx.reply(message, Markup.inlineKeyboard([
@@ -200,33 +209,17 @@ async function handleMessage(ctx) {
       const userAddress = await getAddressByUserId(ctx.from.id);
       const privateKey = config.privateKey;
 
-      const tokenAddress = ctx.session.tokenInfo.tokenAddress;
-      const abi = await fetchTokenABI(tokenAddress);
-      if (!abi) {
-        ctx.reply('Failed to fetch token ABI. Please try again later.');
-        return;
-      }
-      const tokenContract = new web3.eth.Contract(abi, tokenAddress);
-
       try {
-        const tx = {
-          from: userAddress,
-          to: tokenAddress,
-          data: tokenContract.methods.buyToken().encodeABI(),
-          value: web3.utils.toWei(amountInCRO.toString(), 'ether'),
-          gas: 2000000,
-        };
+        const bestTrade = await getBestTrade(ctx.session.tokenInfo.tokenAddress, amountInCRO);
+        if (!bestTrade) {
+          ctx.reply('Failed to find a suitable trade. Please try again later.');
+          return;
+        }
 
-        const signedTx = await web3.eth.accounts.signTransaction(tx, privateKey);
-        const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
-
-        // Store the trade data in the database
-        await saveTradeData(ctx.from.id, tokenAddress, amountInCRO);
-
-        ctx.reply(`Successfully bought ${ctx.session.tokenInfo.tokenSymbol}. Transaction receipt: ${receipt.transactionHash}`);
+        const txHash = await executeTrade(bestTrade, userAddress, privateKey);
+        ctx.reply(`Successfully bought ${ctx.session.tokenInfo.tokenSymbol} on ${bestTrade.platform}. Transaction receipt: ${txHash}`);
       } catch (error) {
-        console.error('Error buying token:', error);
-        ctx.reply('Failed to buy token. Please try again later.');
+        ctx.reply('Failed to execute trade. Please try again later.');
       }
 
       ctx.session.expectingBuyAmount = false;
