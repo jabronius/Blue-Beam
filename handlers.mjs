@@ -14,6 +14,8 @@ let db;
 })();
 
 const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
+const EBISUS_BAY_API_URL = 'https://dexscreener.com/cronos?rankBy=trendingScoreH6&order=desc&dexIds=ebisus-bay&minLiq=1000';
+const VVS_FINANCE_API_URL = 'https://dexscreener.com/cronos?rankBy=trendingScoreH6&order=desc&dexIds=vvsfinance&minLiq=1000';
 const CRONOS_EXPLORER_API_URL = 'https://api.cronos.org/api?module=contract&action=getabi&address=';
 
 function getWeb3Instance(network) {
@@ -65,6 +67,7 @@ async function getTokenInfo(tokenAddress) {
       currentPriceCRO: pair.priceNative,
       currentPriceUSD: pair.priceUsd,
       marketCap: pair.fdv,
+      priceChange: pair.priceChange,
       url: pair.url,
       tokenAddress: tokenAddress
     };
@@ -88,7 +91,7 @@ async function fetchTokenABI(tokenAddress) {
 async function fetchTokenHoldings(walletAddress, network) {
   const web3 = getWeb3Instance(network);
   const balanceWei = await web3.eth.getBalance(walletAddress);
-  const balance = web3.utils.fromWei(balanceWei, 'ether');
+  const balance = parseFloat(web3.utils.fromWei(balanceWei, 'ether'));
   const valueUSD = balance * await getTokenUSDValue(network === 'testnet' ? 'tCRO' : (network === 'zkEVM' ? 'zkCRO' : 'CRO'), network);
 
   return [{
@@ -105,6 +108,58 @@ async function getTokenUSDValue(token, network) {
     return 0.1; // Example value, replace with actual
   }
   return 0;
+}
+
+async function calculateProfitAndMetrics(tokenHoldings, tokenInfo) {
+  if (!tokenInfo) {
+    return null;
+  }
+
+  // Placeholder implementation for profit calculation
+  const initialInvestmentCRO = 1; // Example initial investment in CRO
+  const currentValueCRO = tokenHoldings.balance * tokenInfo.currentPriceCRO;
+  const profitCRO = currentValueCRO - initialInvestmentCRO;
+  const profitPercent = (profitCRO / initialInvestmentCRO) * 100;
+  const valueUSD = tokenHoldings.valueUSD;
+  const valueCRO = tokenHoldings.balance;
+  const marketCap = tokenInfo.marketCap;
+  const price = tokenInfo.currentPriceCRO;
+  const priceChanges = tokenInfo.priceChange;
+
+  return {
+    profitPercent: profitPercent.toFixed(2),
+    profitCRO: profitCRO.toFixed(4),
+    valueUSD: valueUSD.toFixed(2),
+    valueCRO: valueCRO.toFixed(4),
+    marketCap: marketCap.toLocaleString(),
+    price: price.toFixed(10),
+    priceChanges: priceChanges
+  };
+}
+
+async function fetchTopCoins(apiUrl, limit = 5) {
+  try {
+    const response = await axios.get(apiUrl);
+    const coins = response.data.pairs.slice(0, limit).map(pair => ({
+      name: pair.baseToken.name,
+      symbol: pair.baseToken.symbol,
+      marketCap: pair.fdv
+    }));
+    return coins;
+  } catch (error) {
+    console.error('Error fetching top coins:', error);
+    return [];
+  }
+}
+
+async function fetchLatestPairs() {
+  try {
+    const response = await axios.get(`${DEXS_CREENER_API_URL}new-pairs`);
+    return response.data.pairs.slice(0, 5);
+  } catch (error) {
+    console.error('Error fetching latest pairs:', error);
+    return [];
+  }
 }
 
 async function handleStart(ctx) {
@@ -172,43 +227,51 @@ async function handleCallbackQuery(ctx) {
 }
 
 async function handleMessage(ctx) {
-  if (ctx.session) {
-    if (ctx.session.expectingTokenAddress) {
-      const tokenAddress = ctx.message.text.trim();
-      const tokenInfo = await getTokenInfo(tokenAddress);
-      if (tokenInfo) {
-        ctx.session.tokenInfo = tokenInfo;
-        const userBalance = await getCronosBalance(ctx.from.id, 'mainnet');
-        await sendTokenInfo(ctx, tokenInfo, userBalance, 'mainnet');
-      } else {
-        ctx.reply('Failed to fetch token information. Please try again later.');
+  const text = ctx.message.text.trim().toLowerCase();
+  switch (text) {
+    case '/home':
+      await ctx.reply('Choose an option:',
+        Markup.inlineKeyboard([
+          [Markup.button.callback('Create Wallet', 'create_wallet'), Markup.button.callback('Import Wallet', 'import_wallet')],
+          [Markup.button.callback('Paste Token', 'paste_token'), Markup.button.callback('Open Positions', 'open_positions')],
+          [Markup.button.callback('Help', 'help'), Markup.button.callback('Settings', 'settings')]
+        ])
+      );
+      break;
+    case '/token':
+      if (!ctx.session) {
+        ctx.session = {};
       }
-      ctx.session.expectingTokenAddress = false;
-    } else if (ctx.session.expectingBuyAmount) {
-      const amountInCRO = parseFloat(ctx.message.text.trim());
-      if (isNaN(amountInCRO) || amountInCRO <= 0) {
-        ctx.reply('Invalid amount. Please enter a valid number.');
-        return;
-      }
-
-      const userAddress = await getAddressByUserId(ctx.from.id);
-      const privateKey = config.privateKey;
-
-      try {
-        const bestTrade = await getBestTrade(ctx.session.tokenInfo.tokenAddress, amountInCRO);
-        if (!bestTrade) {
-          ctx.reply('Failed to find a suitable trade. Please try again later.');
-          return;
-        }
-
-        const txHash = await executeTrade(bestTrade, userAddress, privateKey);
-        ctx.reply(`Successfully bought ${ctx.session.tokenInfo.tokenSymbol} on ${bestTrade.platform}. Transaction receipt: ${txHash}`);
-      } catch (error) {
-        ctx.reply('Failed to execute trade. Please try again later.');
-      }
-
-      ctx.session.expectingBuyAmount = false;
-    }
+      ctx.session.expectingTokenAddress = true;
+      ctx.reply('Please paste the Cronos token address.');
+      break;
+    case '/ebisus':
+      const ebisusTopCoins = await fetchTopCoins(EBISUS_BAY_API_URL);
+      let ebisusMessage = 'Top 5 paired Cronos coins on Ebisus Bay DEX:\n\n';
+      ebisusTopCoins.forEach((coin, index) => {
+        ebisusMessage += `${index + 1}. ${coin.name} (${coin.symbol}) - ${coin.marketCap.toLocaleString()} Market Cap\n`;
+      });
+      await ctx.reply(ebisusMessage);
+      break;
+    case '/vvs':
+      const vvsTopCoins = await fetchTopCoins(VVS_FINANCE_API_URL);
+      let vvsMessage = 'Top 5 paired Cronos coins on VVS Finance DEX:\n\n';
+      vvsTopCoins.forEach((coin, index) => {
+        vvsMessage += `${index + 1}. ${coin.name} (${coin.symbol}) - ${coin.marketCap.toLocaleString()} Market Cap\n`;
+      });
+      await ctx.reply(vvsMessage);
+      break;
+    case '/new':
+      const latestPairs = await fetchLatestPairs();
+      let latestPairsMessage = 'Latest 5 Cronos pairs from Dex Screener:\n\n';
+      latestPairs.forEach((pair, index) => {
+        latestPairsMessage += `${index + 1}. ${pair.baseToken.name} (${pair.baseToken.symbol}) / ${pair.quoteToken.name} (${pair.quoteToken.symbol}) - Pair URL: ${pair.pairUrl}\n`;
+      });
+      await ctx.reply(latestPairsMessage);
+      break;
+    default:
+      ctx.reply('Unknown command. Please use one of the available commands.');
+      break;
   }
 }
 
@@ -238,26 +301,46 @@ async function displayCombinedHoldings(ctx) {
     ctx.reply("No wallet found. Please create or import a wallet.");
     return;
   }
+
   const mainnetHoldings = await fetchTokenHoldings(walletAddress, 'mainnet');
   const testnetHoldings = await fetchTokenHoldings(walletAddress, 'testnet');
   const zkEvmHoldings = await fetchTokenHoldings(walletAddress, 'zkEVM');
 
-  let message = `Wallet Address: ${walletAddress}\n\n`;
-  
-  message += `Your token holdings on Cronos Mainnet:\n`;
-  for (const holding of mainnetHoldings) {
-    message += `Token Name: ${holding.token}\nAmount: ${holding.balance}\nValue (USD): ${holding.valueUSD}\n\n`;
+  let message = `Wallet Address: ${walletAddress}\n\nPositions Overview: (Cronos Mainnet)\n\n`;
+
+  for (const [index, holding] of mainnetHoldings.entries()) {
+    const tokenInfo = await getTokenInfo(holding.token);
+    if (!tokenInfo) {
+      message += `/${index + 1} Token Info Unavailable\n\n`;
+      continue;
+    }
+
+    const metrics = await calculateProfitAndMetrics(holding, tokenInfo);
+    if (!metrics) {
+      message += `/${index + 1} Metrics Calculation Failed\n\n`;
+      continue;
+    }
+
+    message += `/${index + 1} ${tokenInfo.tokenName}\n`;
+    message += `Profit: ${metrics.profitPercent}% / ${metrics.profitCRO} CRO\n`;
+    message += `Value: $${metrics.valueUSD} / ${metrics.valueCRO} CRO\n`;
+    message += `Mcap: $${metrics.marketCap} @ $${metrics.price}\n`;
+    message += `5m: ${metrics.priceChanges.m5}%, 1h: ${metrics.priceChanges.h1}%, 6h: ${metrics.priceChanges.h6}%, 24h: ${metrics.priceChanges.h24}%\n\n`;
   }
 
-  message += `Your token holdings on Cronos Testnet:\n`;
-  for (const holding of testnetHoldings) {
-    message += `Token Name: ${holding.token}\nAmount: ${holding.balance}\nValue (USD): ${holding.valueUSD}\n\n`;
-  }
+  let totalBalance = mainnetHoldings.reduce((sum, holding) => sum + holding.balance, 0) +
+                       testnetHoldings.reduce((sum, holding) => sum + holding.balance, 0) +
+                       zkEvmHoldings.reduce((sum, holding) => sum + holding.balance, 0);
 
-  message += `Your token holdings on Cronos zkEVM:\n`;
-  for (const holding of zkEvmHoldings) {
-    message += `Token Name: ${holding.token}\nAmount: ${holding.balance}\nValue (USD): ${holding.valueUSD}\n\n`;
-  }
+  let totalValueUSD = mainnetHoldings.reduce((sum, holding) => sum + holding.valueUSD, 0) +
+                        testnetHoldings.reduce((sum, holding) => sum + holding.valueUSD, 0) +
+                        zkEvmHoldings.reduce((sum, holding) => sum + holding.valueUSD, 0);
+
+  totalBalance = totalBalance.toFixed(4);
+  totalValueUSD = totalValueUSD.toFixed(2);
+
+  message += `Balance: ${mainnetHoldings[0]?.balance || 0} CRO\n`;
+  message += `Net Worth: ${totalBalance} CRO / $${totalValueUSD}\n`;
 
   await ctx.reply(message, Markup.inlineKeyboard([
     Markup.button.callback('BUY', 'buy_token'),
