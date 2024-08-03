@@ -2,7 +2,7 @@ import axios from 'axios';
 import { Markup } from 'telegraf';
 import Web3 from 'web3';
 import bip39 from 'bip39';
-import { initializeDatabase, getAddressByUserId, saveUserCronosAddress } from './database.mjs';
+import { initializeDatabase, getAddressByUserId, saveUserCronosAddress, updateUserCronosAddress } from './database.mjs';
 import { config } from './config.mjs';
 
 import wallet from 'ethereumjs-wallet';
@@ -14,9 +14,8 @@ let db;
 })();
 
 const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
-const EBISUS_BAY_API_URL = 'https://dexscreener.com/cronos?rankBy=trendingScoreH6&order=desc&dexIds=ebisus-bay&minLiq=1000';
-const VVS_FINANCE_API_URL = 'https://dexscreener.com/cronos?rankBy=trendingScoreH6&order=desc&dexIds=vvsfinance&minLiq=1000';
 const CRONOS_EXPLORER_API_URL = 'https://api.cronos.org/api?module=contract&action=getabi&address=';
+const TOKENS_LIST_URL = 'https://api.coingecko.com/api/v3/coins/list'; // URL to fetch the list of all available tokens
 
 function getWeb3Instance(network) {
   switch (network) {
@@ -57,7 +56,8 @@ async function getTokenInfo(tokenAddress) {
     });
     const data = response.data;
     if (!data.pairs || data.pairs.length === 0) {
-      throw new Error('No pairs found for the given token address');
+      console.warn('No pairs found for the given token address:', tokenAddress);
+      return null;
     }
     const pair = data.pairs[0];
 
@@ -88,17 +88,44 @@ async function fetchTokenABI(tokenAddress) {
   }
 }
 
-async function fetchTokenHoldings(walletAddress, network) {
-  const web3 = getWeb3Instance(network);
-  const balanceWei = await web3.eth.getBalance(walletAddress);
-  const balance = parseFloat(web3.utils.fromWei(balanceWei, 'ether'));
-  const valueUSD = balance * await getTokenUSDValue(network === 'testnet' ? 'tCRO' : (network === 'zkEVM' ? 'zkCRO' : 'CRO'), network);
+async function fetchTokens(walletAddress, web3) {
+  const tokensResponse = await axios.get(TOKENS_LIST_URL);
+  const tokensList = tokensResponse.data;
 
-  return [{
-    token: network === 'testnet' ? 'tCRO' : (network === 'zkEVM' ? 'zkCRO' : 'CRO'),
-    balance: balance,
-    valueUSD: valueUSD
-  }];
+  // Filter tokens to include only those on Cronos chain and format for usage
+  const cronosTokens = tokensList.filter(token => token.platforms && token.platforms.cronos).map(token => ({
+    address: token.platforms.cronos,
+    symbol: token.symbol.toUpperCase(),
+    priceUSD: token.current_price
+  }));
+
+  // Fetch balances for all tokens
+  const holdings = [];
+  for (let token of cronosTokens) {
+    try {
+      const tokenBalanceWei = await web3.eth.call({
+        to: token.address,
+        data: web3.eth.abi.encodeFunctionCall({
+          name: 'balanceOf',
+          type: 'function',
+          inputs: [{ type: 'address', name: 'owner' }]
+        }, [walletAddress])
+      });
+      const tokenBalance = parseFloat(web3.utils.fromWei(tokenBalanceWei, 'ether'));
+      const tokenValueUSD = tokenBalance * token.priceUSD;
+
+      holdings.push({
+        token: token.symbol,
+        balance: tokenBalance,
+        valueUSD: tokenValueUSD,
+        tokenAddress: token.address
+      });
+    } catch (error) {
+      console.error(`Error fetching balance for token ${token.symbol}:`, error);
+    }
+  }
+
+  return holdings;
 }
 
 async function getTokenUSDValue(token, network) {
@@ -177,13 +204,18 @@ async function handleCallbackQuery(ctx) {
 
   switch (action) {
     case 'create_wallet':
+      const existingAddress = await getAddressByUserId(ctx.from.id);
+      if (existingAddress) {
+        await ctx.reply(`You already have a wallet: ${existingAddress}`);
+        return;
+      }
       const mnemonic = bip39.generateMnemonic();
       const seed = await bip39.mnemonicToSeed(mnemonic);
       const hdWallet = hdkey.fromMasterSeed(seed);
       const key = hdWallet.derivePath("m/44'/60'/0'/0/0");
       const wallet = key.getWallet();
       const address = wallet.getChecksumAddressString();
-      await saveUserCronosAddress(ctx.from.id, address, mnemonic);
+      await saveUserCronosAddress(ctx.from.id, address, mnemonic); // Ensure we update the address in the database
       const balance = await getCronosBalance(ctx.from.id, 'mainnet');
       await ctx.reply(`Wallet created! Address: ${address}`);
       if (balance) {
@@ -285,11 +317,18 @@ async function handleMessage(ctx) {
       const seed = await bip39.mnemonicToSeed(mnemonicData.mnemonic);
       const hdWallet = hdkey.fromMasterSeed(seed);
       const key = hdWallet.derivePath("m/44'/60'/0'/0/0");
-      const wallet = key.getWallet();
-      const privateKey = wallet.getPrivateKeyString();
+      const derivedWallet = key.getWallet();
+      const privateKey = derivedWallet.getPrivateKeyString();
+
+      // Verify that the private key matches the wallet address
+      const derivedAddress = derivedWallet.getChecksumAddressString();
+      if (derivedAddress.toLowerCase() !== walletAddress.toLowerCase()) {
+        ctx.reply("The derived address from the private key does not match the stored wallet address.");
+        return;
+      }
 
       await ctx.reply(
-        `Wallet Address: ${walletAddress}\n\nPrivate Key: ${privateKey}\n\nPrivate Phrase: ${mnemonicData.mnemonic}`
+        `Wallet Address: ${walletAddress}\n\nPrivate Key: ${privateKey}`
       );
       break;
     default:
@@ -325,14 +364,13 @@ async function displayCombinedHoldings(ctx) {
     return;
   }
 
-  const mainnetHoldings = await fetchTokenHoldings(walletAddress, 'mainnet');
-  const testnetHoldings = await fetchTokenHoldings(walletAddress, 'testnet');
-  const zkEvmHoldings = await fetchTokenHoldings(walletAddress, 'zkEVM');
+  const web3 = getWeb3Instance('mainnet');
+  const mainnetHoldings = await fetchTokens(walletAddress, web3);
 
   let message = `Wallet Address: ${walletAddress}\n\nPositions Overview: (Cronos Mainnet)\n\n`;
 
   for (const [index, holding] of mainnetHoldings.entries()) {
-    const tokenInfo = await getTokenInfo(holding.token);
+    const tokenInfo = await getTokenInfo(holding.tokenAddress);
     if (!tokenInfo) {
       message += `/${index + 1} Token Info Unavailable\n\n`;
       continue;
@@ -351,18 +389,13 @@ async function displayCombinedHoldings(ctx) {
     message += `5m: ${metrics.priceChanges.m5}%, 1h: ${metrics.priceChanges.h1}%, 6h: ${metrics.priceChanges.h6}%, 24h: ${metrics.priceChanges.h24}%\n\n`;
   }
 
-  let totalBalance = mainnetHoldings.reduce((sum, holding) => sum + holding.balance, 0) +
-                       testnetHoldings.reduce((sum, holding) => sum + holding.balance, 0) +
-                       zkEvmHoldings.reduce((sum, holding) => sum + holding.balance, 0);
-
-  let totalValueUSD = mainnetHoldings.reduce((sum, holding) => sum + holding.valueUSD, 0) +
-                        testnetHoldings.reduce((sum, holding) => sum + holding.valueUSD, 0) +
-                        zkEvmHoldings.reduce((sum, holding) => sum + holding.valueUSD, 0);
+  let totalBalance = mainnetHoldings.reduce((sum, holding) => sum + holding.balance, 0);
+  let totalValueUSD = mainnetHoldings.reduce((sum, holding) => sum + holding.valueUSD, 0);
 
   totalBalance = totalBalance.toFixed(4);
   totalValueUSD = totalValueUSD.toFixed(2);
 
-  message += `Balance: ${mainnetHoldings[0]?.balance || 0} CRO\n`;
+  message += `Balance: ${totalBalance} CRO\n`;
   message += `Net Worth: ${totalBalance} CRO / $${totalValueUSD}\n`;
 
   await ctx.reply(message, Markup.inlineKeyboard([
