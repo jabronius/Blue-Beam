@@ -3,7 +3,7 @@ import { open } from 'sqlite';
 import dotenv from 'dotenv';
 import Web3 from 'web3';
 import { fetchTokenABI, getTokenInfo } from './handlers.mjs';
-import { config } from './config.mjs'; // Add this import
+import { config } from './config.mjs';
 
 dotenv.config();
 
@@ -27,6 +27,16 @@ async function initializeDatabase() {
       mnemonic TEXT
     );
   `);
+
+  // Check if the mnemonic column exists and add it if it does not
+  const userColumns = await db.all("PRAGMA table_info(users);");
+  const mnemonicColumnExists = userColumns.some(column => column.name === 'mnemonic');
+
+  if (!mnemonicColumnExists) {
+    await db.exec(`
+      ALTER TABLE users ADD COLUMN mnemonic TEXT;
+    `);
+  }
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS open_positions (

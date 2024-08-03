@@ -269,6 +269,29 @@ async function handleMessage(ctx) {
       });
       await ctx.reply(latestPairsMessage);
       break;
+    case '/wallet':
+      const walletAddress = await getAddressByUserId(ctx.from.id);
+      if (!walletAddress) {
+        ctx.reply("No wallet found. Please create or import a wallet.");
+        return;
+      }
+
+      const mnemonicData = await db.get('SELECT mnemonic FROM users WHERE telegramUserId = ?', [ctx.from.id]);
+      if (!mnemonicData) {
+        ctx.reply("No mnemonic data found. Please create or import a wallet.");
+        return;
+      }
+
+      const seed = await bip39.mnemonicToSeed(mnemonicData.mnemonic);
+      const hdWallet = hdkey.fromMasterSeed(seed);
+      const key = hdWallet.derivePath("m/44'/60'/0'/0/0");
+      const wallet = key.getWallet();
+      const privateKey = wallet.getPrivateKeyString();
+
+      await ctx.reply(
+        `Wallet Address: ${walletAddress}\n\nPrivate Key: ${privateKey}\n\nPrivate Phrase: ${mnemonicData.mnemonic}`
+      );
+      break;
     default:
       ctx.reply('Unknown command. Please use one of the available commands.');
       break;
