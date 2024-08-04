@@ -4,11 +4,13 @@
         "AUTOINCREMENT",
         "CREENER",
         "cronos",
+        "CRONOSCAN",
         "Crytpo",
         "DATETIME",
         "DEXS",
         "FGWJ",
         "FYCF",
+        "getabi",
         "hdkey",
         "KHTML",
         "Mcap",
@@ -16,6 +18,7 @@
         "setaddress",
         "Solana",
         "tcronos",
+        "tokentx",
         "YDMF"
     ]
 }
