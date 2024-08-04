@@ -14,7 +14,7 @@ let db;
 })();
 
 const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
-const CRONOS_SCAN_API_URL = 'https://api.cronoscan.com/api?module=contract&action=getabi&address=';
+const CRONOS_SCAN_API_URL = 'https://api.cronoscan.com/api';
 const RPC_URLS = [
   'https://cronos-evm-rpc.publicnode.com/',
   'https://evm-cronos.crypto.org/'
@@ -79,7 +79,7 @@ async function getTokenInfo(tokenAddress) {
 async function fetchTokenABI(tokenAddress) {
   const apiKey = 'BM5H9MZ1S8YDMF91FYCF3FGWJ732F94GTA';  // Your CronosScan API key
   try {
-    const response = await axios.get(`${CRONOS_SCAN_API_URL}${tokenAddress}&apikey=${apiKey}`);
+    const response = await axios.get(`${CRONOS_SCAN_API_URL}?module=contract&action=getabi&address=${tokenAddress}&apikey=${apiKey}`);
     const data = response.data;
 
     // Handle case where API key is invalid or other errors
@@ -95,21 +95,29 @@ async function fetchTokenABI(tokenAddress) {
   }
 }
 
-async function fetchTokens(walletAddress, web3, retries = 3) {
-  const tokenAddresses = [
-    '0x3b41B27E74Dd366CE27cB389dc7877D4e1516d4d', // Add more token addresses as needed
-  ];
+async function fetchTokens(walletAddress, web3) {
+  try {
+    const apiKey = 'BM5H9MZ1S8YDMF91FYCF3FGWJ732F94GTA';  // Your CronosScan API key
+    const response = await axios.get(`${CRONOS_SCAN_API_URL}?module=account&action=tokentx&address=${walletAddress}&apikey=${apiKey}`);
+    const data = response.data;
 
-  const holdings = [];
-  for (const tokenAddress of tokenAddresses) {
-    const tokenABI = await fetchTokenABI(tokenAddress);
-    if (!tokenABI) {
-      console.error(`Failed to fetch ABI for token ${tokenAddress}`);
-      continue;
+    if (data.status !== '1') {
+      throw new Error(`CronosScan API error: ${data.message}`);
     }
 
-    const tokenContract = new web3.eth.Contract(tokenABI, tokenAddress);
-    try {
+    const tokenTransactions = data.result;
+    const uniqueTokenAddresses = [...new Set(tokenTransactions.map(tx => tx.contractAddress))];
+
+    const holdings = [];
+    for (const tokenAddress of uniqueTokenAddresses) {
+      console.log(`Fetching token balance for address: ${tokenAddress}`);
+      const tokenABI = await fetchTokenABI(tokenAddress);
+      if (!tokenABI) {
+        console.error(`Failed to fetch ABI for token ${tokenAddress}`);
+        continue;
+      }
+
+      const tokenContract = new web3.eth.Contract(tokenABI, tokenAddress);
       const tokenBalanceWei = await tokenContract.methods.balanceOf(walletAddress).call();
       const tokenDecimals = await tokenContract.methods.decimals().call();
 
@@ -139,16 +147,13 @@ async function fetchTokens(walletAddress, web3, retries = 3) {
         tokenInfo: tokenInfo,
         quantity: tokenBalanceFormatted, // Add quantity field to holdings
       });
-    } catch (error) {
-      console.error(`Error fetching balance for token ${tokenAddress}:`, error);
-      if (retries > 0) {
-        console.log(`Retrying to fetch balance for token ${tokenAddress} (attempt ${4 - retries} left)`);
-        return fetchTokens(walletAddress, web3, retries - 1);
-      }
     }
-  }
 
-  return holdings;
+    return holdings;
+  } catch (error) {
+    console.error('Error fetching tokens:', error);
+    return [];
+  }
 }
 
 async function calculateProfitAndMetrics(tokenHoldings, tokenInfo) {
@@ -366,14 +371,15 @@ async function displayCombinedHoldings(ctx) {
   }
 
   const web3 = getWeb3Instance('mainnet');
-  const mainnetBalance = await getCronosBalance(walletAddress, 'mainnet');
-  const mainnetHoldings = await fetchTokens(walletAddress, web3);
+  const croBalance = await getCronosBalance(walletAddress, 'mainnet');
+  const tokenHoldings = await fetchTokens(walletAddress, web3);
 
   let message = `Positions Overview: (CRONOS MAINNET)\nWallet Address: ${walletAddress}\n\n`;
 
-  console.log('Mainnet Holdings:', mainnetHoldings); // Log mainnet holdings
+  console.log('Token Holdings:', tokenHoldings); // Log token holdings
 
-  for (const [index, holding] of mainnetHoldings.entries()) {
+  let totalTokenValueUSD = 0;
+  for (const [index, holding] of tokenHoldings.entries()) {
     const tokenInfo = holding.tokenInfo;
 
     const metrics = await calculateProfitAndMetrics(holding, tokenInfo);
@@ -381,6 +387,8 @@ async function displayCombinedHoldings(ctx) {
       message += `/${index + 1} Metrics Calculation Failed\n\n`;
       continue;
     }
+
+    totalTokenValueUSD += parseFloat(metrics.valueUSD);
 
     message += `/${index + 1} ${tokenInfo.tokenSymbol}\n`;
     message += `Profit: ${metrics.profitPercent}% / ${metrics.profitCRO} CRO\n`;
@@ -390,14 +398,10 @@ async function displayCombinedHoldings(ctx) {
     message += `5m: ${metrics.priceChanges.m5}%, 1h: ${metrics.priceChanges.h1}%, 6h: ${metrics.priceChanges.h6}%, 24h: ${metrics.priceChanges.h24}%\n\n`;
   }
 
-  let totalBalance = mainnetHoldings.reduce((sum, holding) => sum + parseFloat(holding.balance), 0);
-  let totalValueUSD = mainnetHoldings.reduce((sum, holding) => sum + parseFloat(holding.valueUSD), 0);
+  const netWorthCRO = (parseFloat(croBalance) + totalTokenValueUSD).toFixed(4);
 
-  totalBalance = (totalBalance + parseFloat(mainnetBalance)).toFixed(4);
-  totalValueUSD = totalValueUSD.toFixed(2);
-
-  message += `Balance: ${totalBalance} CRO\n`;
-  message += `Net Worth: ${totalBalance} CRO / $${totalValueUSD}\n`;
+  message += `Balance: ${parseFloat(croBalance).toFixed(4)} CRO\n`;
+  message += `Net Worth: ${netWorthCRO} CRO / $${totalTokenValueUSD.toFixed(2)}\n`;
 
   await ctx.reply(message, Markup.inlineKeyboard([
     Markup.button.callback('BUY', 'buy_token'),
