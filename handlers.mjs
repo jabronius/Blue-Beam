@@ -1,11 +1,9 @@
-import { Telegraf, Markup } from 'telegraf';
 import axios from 'axios';
+import { Markup } from 'telegraf';
 import Web3 from 'web3';
 import bip39 from 'bip39';
-import { initializeDatabase, getAddressByUserId, saveUserCronosAddress, updateUserPosition } from './database.mjs';
+import { initializeDatabase, getAddressByUserId, saveUserCronosAddress } from './database.mjs';
 import { config } from './config.mjs';
-
-const bot = new Telegraf(config.telegramApiKey);
 
 import wallet from 'ethereumjs-wallet';
 const { hdkey } = wallet;
@@ -15,6 +13,13 @@ let db;
   db = await initializeDatabase();
 })();
 
+const DEXS_CREENER_API_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
+const CRONOS_SCAN_API_URL = 'https://api.cronoscan.com/api';
+const RPC_URLS = [
+  'https://cronos-evm-rpc.publicnode.com/',
+  'https://evm-cronos.crypto.org/'
+];
+
 function getWeb3Instance(network, retries = 3) {
   let rpcUrl;
   if (network === 'testnet') {
@@ -22,7 +27,6 @@ function getWeb3Instance(network, retries = 3) {
   } else if (network === 'zkEVM') {
     rpcUrl = config.zkCronosRpcUrl;
   } else {
-    const RPC_URLS = [config.cronosRpcUrl, 'https://evm-cronos.crypto.org/'];
     rpcUrl = RPC_URLS[Math.floor(Math.random() * RPC_URLS.length)];
   }
   return new Web3(new Web3.providers.HttpProvider(rpcUrl));
@@ -44,7 +48,7 @@ async function getCronosBalance(address, network, retries = 3) {
 
 async function getTokenInfo(tokenAddress) {
   try {
-    const response = await axios.get(`${config.DEXS_CREENER_API_URL}${tokenAddress}`, {
+    const response = await axios.get(`${DEXS_CREENER_API_URL}${tokenAddress}`, {
       headers: {
         'User-Agent': 'Mozilla/5.0'
       }
@@ -73,10 +77,12 @@ async function getTokenInfo(tokenAddress) {
 }
 
 async function fetchTokenABI(tokenAddress) {
+  const apiKey = 'BM5H9MZ1S8YDMF91FYCF3FGWJ732F94GTA';  // Your CronosScan API key
   try {
-    const response = await axios.get(`${config.CRONOS_SCAN_API_URL}?module=contract&action=getabi&address=${tokenAddress}&apikey=${config.cronosExplorerApiKey}`);
+    const response = await axios.get(`${CRONOS_SCAN_API_URL}?module=contract&action=getabi&address=${tokenAddress}&apikey=${apiKey}`);
     const data = response.data;
 
+    // Handle case where API key is invalid or other errors
     if (data.status !== '1') {
       throw new Error(`CronosScan API error: ${data.message}`);
     }
@@ -91,7 +97,8 @@ async function fetchTokenABI(tokenAddress) {
 
 async function fetchTokens(walletAddress, web3) {
   try {
-    const response = await axios.get(`${config.CRONOS_SCAN_API_URL}?module=account&action=tokentx&address=${walletAddress}&apikey=${config.cronosExplorerApiKey}`);
+    const apiKey = 'BM5H9MZ1S8YDMF91FYCF3FGWJ732F94GTA';  // Your CronosScan API key
+    const response = await axios.get(`${CRONOS_SCAN_API_URL}?module=account&action=tokentx&address=${walletAddress}&apikey=${apiKey}`);
     const data = response.data;
 
     if (data.status !== '1') {
@@ -103,6 +110,7 @@ async function fetchTokens(walletAddress, web3) {
 
     const holdings = [];
     for (const tokenAddress of uniqueTokenAddresses) {
+      console.log(`Fetching token balance for address: ${tokenAddress}`);
       const tokenABI = await fetchTokenABI(tokenAddress);
       if (!tokenABI) {
         console.error(`Failed to fetch ABI for token ${tokenAddress}`);
@@ -113,11 +121,14 @@ async function fetchTokens(walletAddress, web3) {
       const tokenBalanceWei = await tokenContract.methods.balanceOf(walletAddress).call();
       const tokenDecimals = await tokenContract.methods.decimals().call();
 
+      // Convert BigInt to string for handling decimals
       const tokenBalance = BigInt(tokenBalanceWei) / BigInt(Math.pow(10, Number(tokenDecimals)));
       const tokenBalanceFormatted = tokenBalance.toString();
 
+      console.log(`Token Address: ${tokenAddress}, Balance: ${tokenBalanceFormatted}`); // Log token balance
+
       if (Number(tokenBalanceFormatted) === 0) {
-        continue;
+        continue; // Skip tokens with zero balance
       }
 
       const tokenInfo = await getTokenInfo(tokenAddress);
@@ -134,7 +145,7 @@ async function fetchTokens(walletAddress, web3) {
         valueUSD: tokenValueUSD,
         tokenAddress: tokenAddress,
         tokenInfo: tokenInfo,
-        quantity: tokenBalanceFormatted,
+        quantity: tokenBalanceFormatted, // Add quantity field to holdings
       });
     }
 
@@ -150,7 +161,8 @@ async function calculateProfitAndMetrics(tokenHoldings, tokenInfo) {
     return null;
   }
 
-  const initialInvestmentCRO = 1;
+  // Placeholder implementation for profit calculation
+  const initialInvestmentCRO = 1; // Example initial investment in CRO
   const currentValueCRO = parseFloat(tokenHoldings.balance) * tokenInfo.currentPriceCRO;
   const profitCRO = currentValueCRO - initialInvestmentCRO;
   const profitPercent = (profitCRO / initialInvestmentCRO) * 100;
@@ -168,7 +180,7 @@ async function calculateProfitAndMetrics(tokenHoldings, tokenInfo) {
     marketCap: marketCap.toLocaleString(),
     price: price.toFixed(10),
     priceChanges: priceChanges,
-    quantity: tokenHoldings.quantity,
+    quantity: tokenHoldings.quantity, // Include quantity in the metrics
   };
 }
 
@@ -198,7 +210,7 @@ async function handleCallbackQuery(ctx) {
       const key = hdWallet.derivePath("m/44'/60'/0'/0/0");
       const wallet = key.getWallet();
       const address = wallet.getChecksumAddressString();
-      await saveUserCronosAddress(ctx.from.id, address, mnemonic);
+      await saveUserCronosAddress(ctx.from.id, address, mnemonic); // Ensure we update the address in the database
       const balance = await getCronosBalance(address, 'mainnet');
       await ctx.reply(`Wallet created! Address: ${address}`);
       if (balance) {
@@ -245,6 +257,7 @@ async function handleCallbackQuery(ctx) {
       const derivedWalletData = keyData.getWallet();
       const privateKeyData = derivedWalletData.getPrivateKeyString();
 
+      // Verify that the private key matches the wallet address
       const derivedAddressData = derivedWalletData.getChecksumAddressString();
       if (derivedAddressData.toLowerCase() !== walletAddress.toLowerCase()) {
         ctx.reply("The derived address from the private key does not match the stored wallet address.");
@@ -277,15 +290,6 @@ async function handleMessage(ctx) {
     } else {
       ctx.reply('Failed to fetch token information. Please make sure the token address is correct.');
     }
-  } else if (ctx.session && ctx.session.expectingBuyAmount) {
-    ctx.session.expectingBuyAmount = false;
-    const amountCRO = parseFloat(ctx.message.text);
-    if (isNaN(amountCRO) || amountCRO <= 0) {
-      await ctx.reply('Invalid amount. Please enter a valid amount of CRO.');
-      return;
-    }
-    ctx.session.amountCRO = amountCRO;
-    await executeBuy(ctx);
   } else {
     switch (text) {
       case '/home':
@@ -323,6 +327,7 @@ async function handleMessage(ctx) {
         const derivedWalletDat = keyDat.getWallet();
         const privateKeyDat = derivedWalletDat.getPrivateKeyString();
 
+        // Verify that the private key matches the wallet address
         const derivedAddressDat = derivedWalletDat.getChecksumAddressString();
         if (derivedAddressDat.toLowerCase() !== walletAddr.toLowerCase()) {
           ctx.reply("The derived address from the private key does not match the stored wallet address.");
@@ -338,42 +343,6 @@ async function handleMessage(ctx) {
         break;
     }
   }
-}
-
-async function executeBuy(ctx) {
-  const walletAddress = await getAddressByUserId(ctx.from.id);
-  if (!walletAddress) {
-    await ctx.reply("No wallet found. Please create or import a wallet.");
-    return;
-  }
-
-  const web3 = getWeb3Instance('mainnet');
-  const amountCRO = ctx.session.amountCRO;
-
-  try {
-    const tokenAddress = ctx.session.tokenInfo.tokenAddress;
-
-    const tokenABI = await fetchTokenABI(tokenAddress);
-    const tokenContract = new web3.eth.Contract(tokenABI, tokenAddress);
-
-    const swapMethod = tokenContract.methods.swapExactETHForTokens(
-      0,
-      [config.wethAddress, tokenAddress],
-      walletAddress,
-      Math.floor(Date.now() / 1000) + 60 * 20
-    );
-
-    const gas = await swapMethod.estimateGas({ from: walletAddress, value: web3.utils.toWei(amountCRO.toString(), 'ether') });
-    const tx = await swapMethod.send({ from: walletAddress, value: web3.utils.toWei(amountCRO.toString(), 'ether'), gas });
-
-    await updateUserPosition(ctx.from.id, tokenAddress, amountCRO);
-    await ctx.reply(`Successfully purchased tokens! Transaction hash: ${tx.transactionHash}`);
-  } catch (error) {
-    console.error('Error executing buy:', error);
-    await ctx.reply('Failed to execute the purchase. Please try again.');
-  }
-
-  ctx.session.action = null;
 }
 
 async function sendTokenInfo(ctx, tokenInfo, userBalance, network) {
@@ -407,6 +376,8 @@ async function displayCombinedHoldings(ctx) {
 
   let message = `Positions Overview: (CRONOS MAINNET)\nWallet Address: ${walletAddress}\n\n`;
 
+  console.log('Token Holdings:', tokenHoldings); // Log token holdings
+
   let totalTokenValueUSD = 0;
   for (const [index, holding] of tokenHoldings.entries()) {
     const tokenInfo = holding.tokenInfo;
@@ -422,7 +393,7 @@ async function displayCombinedHoldings(ctx) {
     message += `/${index + 1} ${tokenInfo.tokenSymbol}\n`;
     message += `Profit: ${metrics.profitPercent}% / ${metrics.profitCRO} CRO\n`;
     message += `Value: $${metrics.valueUSD} / ${metrics.valueCRO} CRO\n`;
-    message += `Tokens Held: ${metrics.quantity}\n`;
+    message += `Tokens Held: ${metrics.quantity}\n`; // Include Tokens Held
     message += `Mcap: $${metrics.marketCap} @ $${metrics.price}\n`;
     message += `5m: ${metrics.priceChanges.m5}%, 1h: ${metrics.priceChanges.h1}%, 6h: ${metrics.priceChanges.h6}%, 24h: ${metrics.priceChanges.h24}%\n\n`;
   }
@@ -438,27 +409,4 @@ async function displayCombinedHoldings(ctx) {
   ]));
 }
 
-// Retry mechanism for bot launch
-async function launchBot(attempts = 5) {
-  while (attempts > 0) {
-    try {
-      await bot.launch();
-      console.log('Bot launched successfully');
-      break;
-    } catch (error) {
-      console.error(`Failed to launch bot: ${error.message}`);
-      attempts -= 1;
-      if (attempts > 0) {
-        console.log(`Retrying to launch bot... (${attempts} attempts left)`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
-      } else {
-        console.error('All attempts to launch the bot failed.');
-      }
-    }
-  }
-}
-
-// Launch the bot with retry mechanism
-launchBot();
-
-export { handleStart, handleCallbackQuery, handleMessage, fetchTokenABI, getTokenInfo, executeBuy };
+export { handleStart, handleCallbackQuery, handleMessage, fetchTokenABI, getTokenInfo };
