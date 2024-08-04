@@ -18,6 +18,16 @@ export async function initializeDatabase() {
     )
   `);
 
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegramUserId INTEGER,
+      tokenAddress TEXT,
+      amountCRO REAL,
+      FOREIGN KEY (telegramUserId) REFERENCES users (telegramUserId)
+    )
+  `);
+
   return db;
 }
 
@@ -43,4 +53,11 @@ export async function updateUserCronosAddress(userId, address, mnemonic) {
   } else {
     await saveUserCronosAddress(userId, address, mnemonic);
   }
+}
+
+export async function updateUserPosition(userId, tokenAddress, amountCRO) {
+  await db.run(
+    'INSERT INTO positions (telegramUserId, tokenAddress, amountCRO) VALUES (?, ?, ?)',
+    [userId, tokenAddress, amountCRO]
+  );
 }
