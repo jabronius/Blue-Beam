@@ -95,7 +95,7 @@ async function fetchTokenABI(tokenAddress) {
   }
 }
 
-async function fetchTokens(walletAddress, web3) {
+async function fetchTokens(walletAddress, web3, retries = 3) {
   try {
     const apiKey = 'BM5H9MZ1S8YDMF91FYCF3FGWJ732F94GTA';  // Your CronosScan API key
     const response = await axios.get(`${CRONOS_SCAN_API_URL}?module=account&action=tokentx&address=${walletAddress}&apikey=${apiKey}`);
@@ -146,12 +146,17 @@ async function fetchTokens(walletAddress, web3) {
         tokenAddress: tokenAddress,
         tokenInfo: tokenInfo,
         quantity: tokenBalanceFormatted, // Add quantity field to holdings
+        abi: tokenABI, // Add the ABI to the token holdings
       });
     }
 
     return holdings;
   } catch (error) {
     console.error('Error fetching tokens:', error);
+    if (retries > 0) {
+      console.log(`Retrying... (${retries - 1} attempts left)`);
+      return fetchTokens(walletAddress, web3, retries - 1);
+    }
     return [];
   }
 }
@@ -184,6 +189,206 @@ async function calculateProfitAndMetrics(tokenHoldings, tokenInfo) {
   };
 }
 
+async function getWalletDetails(userId) {
+  const mnemonicData = await db.get('SELECT mnemonic FROM users WHERE telegramUserId = ?', [userId]);
+  if (!mnemonicData) {
+    throw new Error("No mnemonic data found. Please create or import a wallet.");
+  }
+
+  const seedData = await bip39.mnemonicToSeed(mnemonicData.mnemonic);
+  const hdWalletData = hdkey.fromMasterSeed(seedData);
+  const keyData = hdWalletData.derivePath("m/44'/60'/0'/0/0");
+  const derivedWalletData = keyData.getWallet();
+  const privateKey = derivedWalletData.getPrivateKeyString();
+  const address = derivedWalletData.getChecksumAddressString();
+
+  return { address, privateKey };
+}
+
+async function handleSellToken(ctx, percentage) {
+  const userId = ctx.from.id;
+  const walletDetails = await getWalletDetails(userId);
+  const walletAddress = walletDetails.address;
+  const privateKey = walletDetails.privateKey;
+
+  const web3 = getWeb3Instance('mainnet');
+  const tokenHoldings = await fetchTokens(walletAddress, web3);
+
+  if (tokenHoldings.length === 0) {
+    ctx.reply("No token holdings found in your wallet.");
+    return;
+  }
+
+  const currentTokenIndex = ctx.session.currentTokenIndex || 0;
+  const holding = tokenHoldings[currentTokenIndex];
+
+  if (!holding) {
+    ctx.reply("Invalid token index. Please refresh and try again.");
+    return;
+  }
+
+  const tokenInfo = holding.tokenInfo;
+  const amountToSell = (parseFloat(holding.balance) * (percentage / 100)).toFixed(4);
+
+  const tokenContract = new web3.eth.Contract(holding.abi, holding.tokenAddress);
+  const amountInWei = web3.utils.toWei(amountToSell.toString(), 'ether');
+
+  // VVS Finance Router address and methods for swapping tokens
+  const vvsRouterAddress = '0xd5a26f542b5e0fb87e6e24a216af0fd2e44c5dc8';
+  const vvsRouterABI = [
+    {
+      "constant": false,
+      "inputs": [
+        {"name": "amountIn", "type": "uint256"},
+        {"name": "amountOutMin", "type": "uint256"},
+        {"name": "path", "type": "address[]"},
+        {"name": "to", "type": "address"},
+        {"name": "deadline", "type": "uint256"}
+      ],
+      "name": "swapExactTokensForTokens",
+      "outputs": [{"name": "amounts", "type": "uint256[]"}],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ];
+
+  const vvsRouterContract = new web3.eth.Contract(vvsRouterABI, vvsRouterAddress);
+
+  const path = [holding.tokenAddress, '0x0000000000000000000000000000000000000000']; // Token to CRO path (replace with actual CRO address)
+  const amountOutMin = 0; // You might want to calculate the minimum amount out based on slippage
+
+  const tx = vvsRouterContract.methods.swapExactTokensForTokens(
+    amountInWei,
+    amountOutMin,
+    path,
+    walletAddress,
+    Math.floor(Date.now() / 1000) + 60 * 20 // 20 minutes from the current Unix time
+  );
+
+  try {
+    const gas = await tx.estimateGas({ from: walletAddress });
+    const gasPrice = await web3.eth.getGasPrice();
+
+    const data = tx.encodeABI();
+    const nonce = await web3.eth.getTransactionCount(walletAddress);
+
+    const txData = {
+      from: walletAddress,
+      to: vvsRouterAddress,
+      data,
+      gas,
+      gasPrice,
+      nonce,
+      value: '0x0',
+    };
+
+    const signedTx = await web3.eth.accounts.signTransaction(txData, privateKey);
+    const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
+
+    ctx.reply(`Swapped ${amountToSell} ${tokenInfo.tokenSymbol} (${percentage}% of your holdings) for CRO. Transaction Hash: ${receipt.transactionHash}`);
+  } catch (error) {
+    console.error(`Error swapping token ${tokenInfo.tokenSymbol}:`, error);
+    ctx.reply(`Failed to swap ${amountToSell} ${tokenInfo.tokenSymbol}. Error: ${error.message}`);
+  }
+}
+
+
+// Example for selling 25%
+async function handleSell25(ctx) {
+  await handleSellToken(ctx, 25);
+}
+
+// Add handlers for other percentages and custom amount
+async function handleSell50(ctx) {
+  await handleSellToken(ctx, 50);
+}
+
+async function handleSell100(ctx) {
+  await handleSellToken(ctx, 100);
+}
+
+async function handleSellCustom(ctx) {
+  ctx.session.expectingSellAmount = true;
+  ctx.reply('Please enter the amount you want to sell:');
+}
+
+async function handleSellAndManage(ctx) {
+  if (!ctx.session) {
+    ctx.session = {};
+  }
+
+  const walletAddress = await getAddressByUserId(ctx.from.id);
+  if (!walletAddress) {
+    ctx.reply("No wallet found. Please create or import a wallet.");
+    return;
+  }
+
+  const web3 = getWeb3Instance('mainnet');
+  const tokenHoldings = await fetchTokens(walletAddress, web3);
+
+  if (tokenHoldings.length === 0) {
+    ctx.reply("No token holdings found in your wallet.");
+    return;
+  }
+
+  if (typeof ctx.session.currentTokenIndex === 'undefined') {
+    ctx.session.currentTokenIndex = 0;
+  }
+
+  if (typeof ctx.session.totalTokens === 'undefined') {
+    ctx.session.totalTokens = tokenHoldings.length;
+  }
+
+  const currentTokenIndex = ctx.session.currentTokenIndex;
+  const holding = tokenHoldings[currentTokenIndex];
+
+  const tokenInfo = holding.tokenInfo;
+  const metrics = await calculateProfitAndMetrics(holding, tokenInfo);
+
+  let message = `Token Holdings:\n\n`;
+
+  message += `${tokenInfo.tokenName} | ${tokenInfo.tokenSymbol}\n`;
+  message += `Profit: ${metrics.profitPercent}% / ${metrics.profitCRO} CRO\n`;
+  message += `Value: $${metrics.valueUSD} / ${metrics.valueCRO} CRO\n`;
+  message += `Mcap: $${metrics.marketCap} @ $${metrics.price}\n`;
+  message += `5m: ${metrics.priceChanges.m5}%, 1h: ${metrics.priceChanges.h1}%, 6h: ${metrics.priceChanges.h6}%, 24h: ${metrics.priceChanges.h24}%\n\n`;
+
+  await ctx.reply(message, Markup.inlineKeyboard([
+    [Markup.button.callback('Previous', 'prev_token'), Markup.button.callback('Next', 'next_token')],
+    [Markup.button.callback('Sell 25%', 'sell_25'), Markup.button.callback('Sell 50%', 'sell_50')],
+    [Markup.button.callback('Sell 100%', 'sell_100'), Markup.button.callback('Sell Custom Amount', 'sell_custom')],
+    [Markup.button.callback('Open Positions', 'open_positions'), Markup.button.callback('Show Wallet', 'wallet')],
+    [Markup.button.callback('Paste Token', 'paste_token'), Markup.button.callback('Refresh', 'refresh_data')]
+  ]));
+}
+
+async function handlePrevToken(ctx) {
+  if (!ctx.session) {
+    ctx.session = {};
+  }
+
+  if (typeof ctx.session.currentTokenIndex === 'undefined') {
+    ctx.session.currentTokenIndex = 0;
+  }
+
+  ctx.session.currentTokenIndex = (ctx.session.currentTokenIndex - 1 + ctx.session.totalTokens) % ctx.session.totalTokens;
+  await handleSellAndManage(ctx);
+}
+
+async function handleNextToken(ctx) {
+  if (!ctx.session) {
+    ctx.session = {};
+  }
+
+  if (typeof ctx.session.currentTokenIndex === 'undefined') {
+    ctx.session.currentTokenIndex = 0;
+  }
+
+  ctx.session.currentTokenIndex = (ctx.session.currentTokenIndex + 1) % ctx.session.totalTokens;
+  await handleSellAndManage(ctx);
+}
+
 async function handleStart(ctx) {
   await ctx.reply('Welcome to the Cronos Trading Bot! Please choose an option:',
     Markup.inlineKeyboard([
@@ -197,6 +402,10 @@ async function handleStart(ctx) {
 }
 
 async function handleCallbackQuery(ctx) {
+  if (!ctx.session) {
+    ctx.session = {};
+  }
+
   const action = ctx.callbackQuery.data;
 
   switch (action) {
@@ -287,6 +496,12 @@ async function handleCallbackQuery(ctx) {
     case 'refresh_data':
       await handleSellAndManage(ctx); // Reload the sell and manage data
       break;
+    case 'prev_token':
+      await handlePrevToken(ctx);
+      break;
+    case 'next_token':
+      await handleNextToken(ctx);
+      break;
     default:
       ctx.reply('Unknown command.');
       break;
@@ -294,8 +509,12 @@ async function handleCallbackQuery(ctx) {
 }
 
 async function handleMessage(ctx) {
+  if (!ctx.session) {
+    ctx.session = {};
+  }
+
   const text = ctx.message.text.trim().toLowerCase();
-  if (ctx.session && ctx.session.expectingTokenAddress) {
+  if (ctx.session.expectingTokenAddress) {
     ctx.session.expectingTokenAddress = false;
     const tokenInfo = await getTokenInfo(text);
     if (tokenInfo) {
@@ -306,7 +525,7 @@ async function handleMessage(ctx) {
     } else {
       ctx.reply('Failed to fetch token information. Please make sure the token address is correct.');
     }
-  } else if (ctx.session && ctx.session.expectingSellAmount) {
+  } else if (ctx.session.expectingSellAmount) {
     ctx.session.expectingSellAmount = false;
     const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) {
@@ -434,92 +653,10 @@ async function displayCombinedHoldings(ctx) {
 
   await ctx.reply(message, Markup.inlineKeyboard([
     Markup.button.callback('BUY', 'buy_token'),
-    Markup.button.callback('Paste Token', 'paste_token')
+    Markup.button.callback('Paste Token', 'paste_token'),
+    Markup.button.callback('Sell and Manage', 'sell_and_manage'),
+    Markup.button.callback('Wallet', 'wallet')
   ]));
-}
-
-async function handleSellAndManage(ctx) {
-  const walletAddress = await getAddressByUserId(ctx.from.id);
-  if (!walletAddress) {
-    ctx.reply("No wallet found. Please create or import a wallet.");
-    return;
-  }
-
-  const web3 = getWeb3Instance('mainnet');
-  const tokenHoldings = await fetchTokens(walletAddress, web3);
-
-  if (tokenHoldings.length === 0) {
-    ctx.reply("No token holdings found in your wallet.");
-    return;
-  }
-
-  let message = `Token Holdings:\n\n`;
-
-  for (const holding of tokenHoldings) {
-    const tokenInfo = holding.tokenInfo;
-    const metrics = await calculateProfitAndMetrics(holding, tokenInfo);
-    if (!metrics) {
-      continue;
-    }
-
-    message += `${tokenInfo.tokenName} | ${tokenInfo.tokenSymbol}\n`;
-    message += `Profit: ${metrics.profitPercent}% / ${metrics.profitCRO} CRO\n`;
-    message += `Value: $${metrics.valueUSD} / ${metrics.valueCRO} CRO\n`;
-    message += `Mcap: $${metrics.marketCap} @ $${metrics.price}\n`;
-    message += `5m: ${metrics.priceChanges.m5}%, 1h: ${metrics.priceChanges.h1}%, 6h: ${metrics.priceChanges.h6}%, 24h: ${metrics.priceChanges.h24}%\n\n`;
-  }
-
-  await ctx.reply(message, Markup.inlineKeyboard([
-    [Markup.button.callback('Sell 25%', 'sell_25'), Markup.button.callback('Sell 50%', 'sell_50')],
-    [Markup.button.callback('Sell 100%', 'sell_100'), Markup.button.callback('Sell Custom Amount', 'sell_custom')],
-    [Markup.button.callback('Open Positions', 'open_positions'), Markup.button.callback('Show Wallet', 'wallet')],
-    [Markup.button.callback('Paste Token', 'paste_token'), Markup.button.callback('Refresh', 'refresh_data')]
-  ]));
-}
-
-async function handleSellToken(ctx, percentage) {
-  const walletAddress = await getAddressByUserId(ctx.from.id);
-  if (!walletAddress) {
-    ctx.reply("No wallet found. Please create or import a wallet.");
-    return;
-  }
-
-  const web3 = getWeb3Instance('mainnet');
-  const tokenHoldings = await fetchTokens(walletAddress, web3);
-
-  if (tokenHoldings.length === 0) {
-    ctx.reply("No token holdings found in your wallet.");
-    return;
-  }
-
-  for (const holding of tokenHoldings) {
-    const tokenInfo = holding.tokenInfo;
-    const amountToSell = (parseFloat(holding.balance) * (percentage / 100)).toFixed(4);
-
-    // Add logic to interact with smart contract to sell the token
-    // ...
-
-    ctx.reply(`Sold ${amountToSell} ${tokenInfo.tokenSymbol} (${percentage}% of your holdings)`);
-  }
-}
-
-// Example for selling 25%
-async function handleSell25(ctx) {
-  await handleSellToken(ctx, 25);
-}
-
-// Add handlers for other percentages and custom amount
-async function handleSell50(ctx) {
-  await handleSellToken(ctx, 50);
-}
-
-async function handleSell100(ctx) {
-  await handleSellToken(ctx, 100);
-}
-
-async function handleSellCustom(ctx) {
-  ctx.session.expectingSellAmount = true;
-  ctx.reply('Please enter the amount you want to sell:');
 }
 
 export { handleStart, handleCallbackQuery, handleMessage, fetchTokenABI, getTokenInfo };
