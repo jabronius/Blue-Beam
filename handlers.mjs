@@ -559,27 +559,27 @@ async function handleMessage(ctx) {
           return;
         }
 
-        const mnemonicDat = await db.get('SELECT mnemonic FROM users WHERE telegramUserId = ?', [ctx.from.id]);
-        if (!mnemonicDat) {
+        const mnemonicData = await db.get('SELECT mnemonic FROM users WHERE telegramUserId = ?', [ctx.from.id]);
+        if (!mnemonicData) {
           ctx.reply("No mnemonic data found. Please create or import a wallet.");
           return;
         }
 
-        const seedDat = await bip39.mnemonicToSeed(mnemonicDat.mnemonic);
-        const hdWalletDat = hdkey.fromMasterSeed(seedDat);
-        const keyDat = hdWalletDat.derivePath("m/44'/60'/0'/0/0");
-        const derivedWalletDat = keyDat.getWallet();
-        const privateKeyDat = derivedWalletDat.getPrivateKeyString();
+        const seedData = await bip39.mnemonicToSeed(mnemonicData.mnemonic);
+        const hdWalletData = hdkey.fromMasterSeed(seedData);
+        const keyData = hdWalletData.derivePath("m/44'/60'/0'/0/0");
+        const derivedWalletData = keyData.getWallet();
+        const privateKeyData = derivedWalletData.getPrivateKeyString();
 
         // Verify that the private key matches the wallet address
-        const derivedAddressDat = derivedWalletDat.getChecksumAddressString();
-        if (derivedAddressDat.toLowerCase() !== walletAddr.toLowerCase()) {
+        const derivedAddressData = derivedWalletData.getChecksumAddressString();
+        if (derivedAddressData.toLowerCase() !== walletAddr.toLowerCase()) {
           ctx.reply("The derived address from the private key does not match the stored wallet address.");
           return;
         }
 
         await ctx.replyWithMarkdownV2(
-          `Wallet Address: \`${walletAddr}\`\n\nPrivate Key: \`${privateKeyDat}\``
+          `Wallet Address: \`${walletAddr}\`\n\nPrivate Key: \`${privateKeyData}\``
         );
         break;
       default:
@@ -588,6 +588,7 @@ async function handleMessage(ctx) {
     }
   }
 }
+
 
 async function sendTokenInfo(ctx, tokenInfo, userBalance, network) {
   ctx.reply(
