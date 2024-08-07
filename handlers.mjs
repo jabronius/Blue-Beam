@@ -4,7 +4,6 @@ import Web3 from 'web3';
 import bip39 from 'bip39';
 import { initializeDatabase, getAddressByUserId, saveUserCronosAddress } from './database.mjs';
 import { config } from './config.mjs';
-import hdkey from 'ethereumjs-wallet/hdkey';
 import wallet from 'ethereumjs-wallet';
 const { hdkey } = wallet;
 
