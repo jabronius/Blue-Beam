@@ -26,4 +26,4 @@ export const config = {
     zkCronosChainId: 999, // Replace with actual Chain ID
     zkCronosSymbol: 'zkCRO',
     zkCronosExplorerUrl: 'https://explorer.zkevm.cronos.org/testnet' // Replace with actual explorer URL
-  };
+};

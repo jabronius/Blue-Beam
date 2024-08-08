@@ -5,7 +5,10 @@ import bip39 from 'bip39';
 import { initializeDatabase, getAddressByUserId, saveUserCronosAddress } from './database.mjs';
 import { config } from './config.mjs';
 import wallet from 'ethereumjs-wallet';
-const { hdkey } = wallet;
+
+const hdkey = wallet.hdkey;  // Correct usage of hdkey from ethereumjs-wallet
+
+console.log('hdkey:', hdkey);  // Debug log to check if hdkey is defined
 
 let db;
 (async () => {
@@ -195,6 +198,8 @@ async function getWalletDetails(userId) {
   }
 
   const seedData = await bip39.mnemonicToSeed(mnemonicData.mnemonic);
+  console.log('seedData:', seedData);  // Debug log to check seed data
+  console.log('hdkey:', hdkey);  // Debug log to check hdkey
   const hdWalletData = hdkey.fromMasterSeed(seedData);
   const keyData = hdWalletData.derivePath("m/44'/60'/0'/0/0");
   const derivedWalletData = keyData.getWallet();
@@ -291,7 +296,6 @@ async function handleSellToken(ctx, percentage) {
     ctx.reply(`Failed to swap ${amountToSell} ${tokenInfo.tokenSymbol}. Error: ${error.message}`);
   }
 }
-
 
 // Example for selling 25%
 async function handleSell25(ctx) {
@@ -510,7 +514,6 @@ async function handleCallbackQuery(ctx) {
     ctx.reply('An error occurred. Please try again.');
   }
 }
-
 
 async function handleMessage(ctx) {
   if (!ctx.session) {
