@@ -4,11 +4,9 @@ import Web3 from 'web3';
 import bip39 from 'bip39';
 import { initializeDatabase, getAddressByUserId, saveUserCronosAddress } from './database.mjs';
 import { config } from './config.mjs';
+
 import wallet from 'ethereumjs-wallet';
-
-const hdkey = wallet.hdkey;  // Correct usage of hdkey from ethereumjs-wallet
-
-console.log('hdkey:', hdkey);  // Debug log to check if hdkey is defined
+const { hdkey } = wallet;
 
 let db;
 (async () => {
@@ -198,8 +196,6 @@ async function getWalletDetails(userId) {
   }
 
   const seedData = await bip39.mnemonicToSeed(mnemonicData.mnemonic);
-  console.log('seedData:', seedData);  // Debug log to check seed data
-  console.log('hdkey:', hdkey);  // Debug log to check hdkey
   const hdWalletData = hdkey.fromMasterSeed(seedData);
   const keyData = hdWalletData.derivePath("m/44'/60'/0'/0/0");
   const derivedWalletData = keyData.getWallet();
@@ -296,6 +292,7 @@ async function handleSellToken(ctx, percentage) {
     ctx.reply(`Failed to swap ${amountToSell} ${tokenInfo.tokenSymbol}. Error: ${error.message}`);
   }
 }
+
 
 // Example for selling 25%
 async function handleSell25(ctx) {
@@ -411,107 +408,103 @@ async function handleCallbackQuery(ctx) {
 
   const action = ctx.callbackQuery.data;
 
-  try {
-    switch (action) {
-      case 'create_wallet':
-        const existingAddress = await getAddressByUserId(ctx.from.id);
-        if (existingAddress) {
-          await ctx.reply(`You already have a wallet: ${existingAddress}`);
-          return;
-        }
+  switch (action) {
+    case 'create_wallet':
+      const existingAddress = await getAddressByUserId(ctx.from.id);
+      if (existingAddress) {
+        await ctx.reply(`You already have a wallet: ${existingAddress}`);
+        return;
+      }
+      const mnemonic = bip39.generateMnemonic();
+      const seed = await bip39.mnemonicToSeed(mnemonic);
+      const hdWallet = hdkey.fromMasterSeed(seed);
+      const key = hdWallet.derivePath("m/44'/60'/0'/0/0");
+      const wallet = key.getWallet();
+      const address = wallet.getChecksumAddressString();
+      await saveUserCronosAddress(ctx.from.id, address, mnemonic); // Ensure we update the address in the database
+      const balance = await getCronosBalance(address, 'mainnet');
+      await ctx.reply(`Wallet created! Address: \`${address}\``, { parse_mode: 'MarkdownV2' });
+      if (balance) {
+        await sendBalanceAndOptions(ctx, balance, 'mainnet');
+      } else {
+        ctx.reply("Failed to create wallet. Please try again.");
+      }
+      break;
+    case 'sell_and_manage':
+      await handleSellAndManage(ctx);
+      break;
+    case 'sell_25':
+      await handleSell25(ctx);
+      break;
+    case 'sell_50':
+      await handleSell50(ctx);
+      break;
+    case 'sell_100':
+      await handleSell100(ctx);
+      break;
+    case 'sell_custom':
+      await handleSellCustom(ctx);
+      break;
+    case 'paste_token':
+      if (!ctx.session) {
+        ctx.session = {};
+      }
+      ctx.session.expectingTokenAddress = true;
+      ctx.reply('Please paste the Cronos token address.');
+      break;
+    case 'buy_token':
+      if (!ctx.session || !ctx.session.tokenInfo) {
+        ctx.reply('Please paste a token address first.');
+        break;
+      }
+      ctx.session.expectingBuyAmount = true;
+      ctx.reply(`Enter the amount in ${ctx.session.network === 'testnet' ? 'tCRO' : (ctx.session.network === 'zkEVM' ? 'zkCRO' : 'CRO')} to purchase ${ctx.session.tokenInfo.tokenSymbol}:`);
+      break;
+    case 'wallet':
+      const walletAddress = await getAddressByUserId(ctx.from.id);
+      if (!walletAddress) {
+        ctx.reply("No wallet found. Please create or import a wallet.");
+        return;
+      }
 
-        const mnemonic = bip39.generateMnemonic();
-        const seed = await bip39.mnemonicToSeed(mnemonic);
-        const hdWallet = hdkey.fromMasterSeed(seed);
-        const key = hdWallet.derivePath("m/44'/60'/0'/0/0");
-        const wallet = key.getWallet();
-        const address = wallet.getChecksumAddressString();
-        await saveUserCronosAddress(ctx.from.id, address, mnemonic);
+      const mnemonicData = await db.get('SELECT mnemonic FROM users WHERE telegramUserId = ?', [ctx.from.id]);
+      if (!mnemonicData) {
+        ctx.reply("No mnemonic data found. Please create or import a wallet.");
+        return;
+      }
 
-        const balance = await getCronosBalance(address, 'mainnet');
-        await ctx.reply(`Wallet created! Address: \`${address}\``, { parse_mode: 'MarkdownV2' });
+      const seedData = await bip39.mnemonicToSeed(mnemonicData.mnemonic);
+      const hdWalletData = hdkey.fromMasterSeed(seedData);
+      const keyData = hdWalletData.derivePath("m/44'/60'/0'/0/0");
+      const derivedWalletData = keyData.getWallet();
+      const privateKeyData = derivedWalletData.getPrivateKeyString();
 
-        if (balance) {
-          await sendBalanceAndOptions(ctx, balance, 'mainnet');
-        } else {
-          ctx.reply("Failed to create wallet. Please try again.");
-        }
-        break;
-      case 'sell_and_manage':
-        await handleSellAndManage(ctx);
-        break;
-      case 'sell_25':
-        await handleSell25(ctx);
-        break;
-      case 'sell_50':
-        await handleSell50(ctx);
-        break;
-      case 'sell_100':
-        await handleSell100(ctx);
-        break;
-      case 'sell_custom':
-        await handleSellCustom(ctx);
-        break;
-      case 'paste_token':
-        ctx.session.expectingTokenAddress = true;
-        ctx.reply('Please paste the Cronos token address.');
-        break;
-      case 'buy_token':
-        if (!ctx.session || !ctx.session.tokenInfo) {
-          ctx.reply('Please paste a token address first.');
-          break;
-        }
-        ctx.session.expectingBuyAmount = true;
-        ctx.reply(`Enter the amount in ${ctx.session.network === 'testnet' ? 'tCRO' : (ctx.session.network === 'zkEVM' ? 'zkCRO' : 'CRO')} to purchase ${ctx.session.tokenInfo.tokenSymbol}:`);
-        break;
-      case 'wallet':
-        const walletAddress = await getAddressByUserId(ctx.from.id);
-        if (!walletAddress) {
-          ctx.reply("No wallet found. Please create or import a wallet.");
-          return;
-        }
+      // Verify that the private key matches the wallet address
+      const derivedAddressData = derivedWalletData.getChecksumAddressString();
+      if (derivedAddressData.toLowerCase() !== walletAddress.toLowerCase()) {
+        ctx.reply("The derived address from the private key does not match the stored wallet address.");
+        return;
+      }
 
-        const mnemonicData = await db.get('SELECT mnemonic FROM users WHERE telegramUserId = ?', [ctx.from.id]);
-        if (!mnemonicData) {
-          ctx.reply("No mnemonic data found. Please create or import a wallet.");
-          return;
-        }
-
-        const seedData = await bip39.mnemonicToSeed(mnemonicData.mnemonic);
-        const hdWalletData = hdkey.fromMasterSeed(seedData);
-        const keyData = hdWalletData.derivePath("m/44'/60'/0'/0/0");
-        const derivedWalletData = keyData.getWallet();
-        const privateKeyData = derivedWalletData.getPrivateKeyString();
-
-        const derivedAddressData = derivedWalletData.getChecksumAddressString();
-        if (derivedAddressData.toLowerCase() !== walletAddress.toLowerCase()) {
-          ctx.reply("The derived address from the private key does not match the stored wallet address.");
-          return;
-        }
-
-        await ctx.replyWithMarkdownV2(
-          `Wallet Address: \`${walletAddress}\`\n\nPrivate Key: \`${privateKeyData}\``
-        );
-        break;
-      case 'open_positions':
-        await displayCombinedHoldings(ctx);
-        break;
-      case 'refresh_data':
-        await handleSellAndManage(ctx);
-        break;
-      case 'prev_token':
-        await handlePrevToken(ctx);
-        break;
-      case 'next_token':
-        await handleNextToken(ctx);
-        break;
-      default:
-        ctx.reply('Unknown command.');
-        break;
-    }
-  } catch (error) {
-    console.error('Error in handleCallbackQuery:', error);
-    ctx.reply('An error occurred. Please try again.');
+      await ctx.replyWithMarkdownV2(
+        `Wallet Address: \`${walletAddress}\`\n\nPrivate Key: \`${privateKeyData}\``
+      );
+      break;
+    case 'open_positions':
+      await displayCombinedHoldings(ctx);
+      break;
+    case 'refresh_data':
+      await handleSellAndManage(ctx); // Reload the sell and manage data
+      break;
+    case 'prev_token':
+      await handlePrevToken(ctx);
+      break;
+    case 'next_token':
+      await handleNextToken(ctx);
+      break;
+    default:
+      ctx.reply('Unknown command.');
+      break;
   }
 }
 
